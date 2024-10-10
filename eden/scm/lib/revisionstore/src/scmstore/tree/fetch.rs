@@ -6,12 +6,14 @@
  */
 
 use std::collections::HashMap;
+use std::future;
 use std::time::Instant;
 
 use anyhow::Result;
 use async_runtime::block_on;
 use cas_client::CasClient;
 use crossbeam::channel::Sender;
+use futures::StreamExt;
 use tracing::field;
 use types::fetch_mode::FetchMode;
 use types::hgid::NULL_ID;
@@ -162,6 +164,12 @@ impl FetchState {
         aux_cache: Option<&AuxStore>,
         tree_aux_store: Option<&TreeAuxStore>,
     ) {
+        if self.common.request_attrs == TreeAttributes::AUX_DATA {
+            // If we are only requesting aux data, don't bother querying CAS. Aux data is
+            // required to query CAS, so CAS cannot possibly help.
+            return;
+        }
+
         let span = tracing::info_span!(
             "fetch_cas",
             keys = field::Empty,
@@ -208,16 +216,12 @@ impl FetchState {
         let mut error = 0;
         let mut reqs = 0;
 
-        // TODO: configure
-        let max_batch_size = 1000;
         let start_time = Instant::now();
 
-        for chunk in digests.chunks(max_batch_size) {
-            reqs += 1;
-
-            // TODO: should we fan out here into multiple requests?
-            match block_on(cas_client.fetch(chunk, CasDigestType::Tree)) {
+        block_on(async {
+            cas_client.fetch(&digests, CasDigestType::Tree).await.for_each(|results| match results {
                 Ok(results) => {
+                    reqs += 1;
                     for (digest, data) in results {
                         let Some(key) = digest_to_key.remove(&digest) else {
                             tracing::error!("got CAS result for unrequested digest {:?}", digest);
@@ -268,15 +272,18 @@ impl FetchState {
                             },
                         }
                     }
+                    future::ready(())
                 }
                 Err(err) => {
                     tracing::error!(?err, "overall CAS error");
 
                     // Don't propagate CAS error - we want to fall back to SLAPI.
+                    reqs += 1;
                     error += 1;
+                    future::ready(())
                 }
-            }
-        }
+            }).await;
+        });
 
         span.record("hits", found);
         span.record("requests", reqs);

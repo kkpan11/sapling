@@ -82,7 +82,6 @@ from .. import (
 from ..i18n import _, _n, _x
 from ..node import bin, hex, nullhex, nullid, nullrev, short
 from ..pycompat import decodeutf8, range
-
 from . import migratesymlinks
 from .cmdtable import command
 
@@ -1284,14 +1283,14 @@ def debugdiffdirs(ui, repo, *pats, **opts) -> None:
 )
 def debugdiscovery(ui, repo, remoteurl: str = "default", **opts) -> None:
     """runs the changeset discovery protocol in isolation"""
-    remoteurl, branches = hg.parseurl(ui.expandpath(remoteurl))
+    remoteurl = hg.parseurl(ui.expandpath(remoteurl))
     remote = hg.peer(repo, opts, remoteurl)
     ui.status(_("comparing with %s\n") % util.hidepassword(remoteurl))
 
     # make sure tests are repeatable
     random.seed(12323)
 
-    def doit(pushedrevs, remoteheads, remote=remote):
+    def doit(pushedrevs, remote=remote):
         nodes = None
         if pushedrevs:
             revs = scmutil.revrange(repo, pushedrevs)
@@ -1308,9 +1307,8 @@ def debugdiscovery(ui, repo, remoteurl: str = "default", **opts) -> None:
         elif rheads <= common:
             ui.write(_x("remote is subset\n"))
 
-    remoterevs, _checkout = hg.addbranchrevs(repo, remote, branches, revs=None)
     localrevs = opts["rev"]
-    doit(localrevs, remoterevs)
+    doit(localrevs)
 
 
 @command(
@@ -2306,7 +2304,7 @@ def debugnamecomplete(ui, repo, *args, **opts) -> None:
         # arc uses debugnamecomplete for doing some really wacky things, but
         # luckily it does so by setting HGPLAIN=1, hence the ui.plain()
         # check below
-        if name != "branches" and (ui.plain() or name != "remotebookmarks"):
+        if ui.plain() or name != "remotebookmarks":
             names.update(ns.listnames(repo))
 
     age = ui.configint("zsh", "completion-age")
@@ -2437,9 +2435,6 @@ def debugpreviewbindag(ui, repo, path):
             return False
 
         def obsolete(self):
-            return False
-
-        def closesbranch(self):
             return False
 
     opts = {"template": "{rev}", "graph": True}
@@ -3100,7 +3095,7 @@ def debugssl(ui, repo, source=None, **opts) -> None:
             )
         source = "default"
 
-    source, branches = hg.parseurl(ui.expandpath(source))
+    source = hg.parseurl(ui.expandpath(source))
     url = util.url(source)
     addr = None
 
@@ -3669,7 +3664,6 @@ def debugruntest(ui, *paths, **opts) -> int:
     current configuration.
     """
     import textwrap
-
     from multiprocessing import util as mputil
     from unittest import SkipTest
 

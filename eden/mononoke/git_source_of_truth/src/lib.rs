@@ -43,10 +43,10 @@ pub trait GitSourceOfTruthConfig: Send + Sync {
         source_of_truth: GitSourceOfTruth,
     ) -> Result<()>;
 
-    async fn get_by_repo_id(
+    async fn get_by_repo_name(
         &self,
         ctx: &CoreContext,
-        repo_id: RepositoryId,
+        repo_name: &RepositoryName,
         staleness: Staleness,
     ) -> Result<Option<GitSourceOfTruthConfigEntry>>;
 
@@ -78,10 +78,10 @@ impl GitSourceOfTruthConfig for NoopGitSourceOfTruthConfig {
         Ok(())
     }
 
-    async fn get_by_repo_id(
+    async fn get_by_repo_name(
         &self,
         _ctx: &CoreContext,
-        _repo_id: RepositoryId,
+        _repo_name: &RepositoryName,
         _staleness: Staleness,
     ) -> Result<Option<GitSourceOfTruthConfigEntry>> {
         Ok(None)
@@ -108,7 +108,7 @@ impl GitSourceOfTruthConfig for NoopGitSourceOfTruthConfig {
 
 #[derive(Clone)]
 pub struct TestGitSourceOfTruthConfig {
-    entries: Arc<Mutex<HashMap<RepositoryId, GitSourceOfTruthConfigEntry>>>,
+    entries: Arc<Mutex<HashMap<RepositoryName, GitSourceOfTruthConfigEntry>>>,
 }
 
 impl TestGitSourceOfTruthConfig {
@@ -124,16 +124,15 @@ impl GitSourceOfTruthConfig for TestGitSourceOfTruthConfig {
     async fn set(
         &self,
         _ctx: &CoreContext,
-        repo_id: RepositoryId,
+        _repo_id: RepositoryId,
         repo_name: RepositoryName,
         source_of_truth: GitSourceOfTruth,
     ) -> Result<()> {
         let mut map = self.entries.lock().expect("poisoned lock");
         map.insert(
-            repo_id.to_owned(),
+            repo_name.to_owned(),
             GitSourceOfTruthConfigEntry {
                 id: RowId(0),
-                repo_id,
                 repo_name,
                 source_of_truth,
             },
@@ -141,17 +140,17 @@ impl GitSourceOfTruthConfig for TestGitSourceOfTruthConfig {
         Ok(())
     }
 
-    async fn get_by_repo_id(
+    async fn get_by_repo_name(
         &self,
         _ctx: &CoreContext,
-        repo_id: RepositoryId,
+        repo_name: &RepositoryName,
         _staleness: Staleness,
     ) -> Result<Option<GitSourceOfTruthConfigEntry>> {
         Ok(self
             .entries
             .lock()
             .expect("poisoned lock")
-            .get(&repo_id)
+            .get(repo_name)
             .cloned())
     }
 

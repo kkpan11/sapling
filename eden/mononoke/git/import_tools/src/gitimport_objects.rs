@@ -197,6 +197,9 @@ pub struct GitimportPreferences {
     pub concurrency: usize,
     /// Whether submodules should be imported instead of dropped.
     pub submodules: bool,
+    /// Flag for controlling whether we should stream changed trees per commit. In case of deep-nested
+    /// trees, gitimport can hang without making progress. Disable this flag to avoid that issue.
+    pub stream_for_changed_trees: bool,
     pub lfs: GitImportLfs,
     pub git_command_path: PathBuf,
     pub backfill_derivation: BackfillDerivation,
@@ -212,6 +215,7 @@ impl Default for GitimportPreferences {
             lfs: GitImportLfs::default(),
             git_command_path: PathBuf::from("/usr/bin/git.real"),
             backfill_derivation: BackfillDerivation::No,
+            stream_for_changed_trees: true,
         }
     }
 }
@@ -527,7 +531,7 @@ impl ExtractedCommit {
         &self,
         ctx: &CoreContext,
         reader: &Reader,
-    ) -> impl Stream<Item = Result<BonsaiDiffFileChange<GitLeaf>, Error>> {
+    ) -> impl Stream<Item = Result<BonsaiDiffFileChange<(FileType, GitLeaf)>, Error>> {
         let tree = GitTree::<SUBMODULES>(self.tree_oid);
         let parent_trees = self
             .parent_tree_oids
@@ -545,7 +549,7 @@ impl ExtractedCommit {
         ctx: &CoreContext,
         reader: &Reader,
         submodules: bool,
-    ) -> impl Stream<Item = Result<BonsaiDiffFileChange<GitLeaf>, Error>> {
+    ) -> impl Stream<Item = Result<BonsaiDiffFileChange<(FileType, GitLeaf)>, Error>> {
         if submodules {
             self.diff_for_submodules::<true, Reader>(ctx, reader)
                 .left_stream()
@@ -587,7 +591,7 @@ impl ExtractedCommit {
         &self,
         ctx: &CoreContext,
         reader: &GitRepoReader,
-    ) -> impl Stream<Item = Result<BonsaiDiffFileChange<GitLeaf>, Error>> {
+    ) -> impl Stream<Item = Result<BonsaiDiffFileChange<(FileType, GitLeaf)>, Error>> {
         let tree = GitTree::<SUBMODULES>(self.tree_oid);
         bonsai_diff(ctx.clone(), reader.clone(), tree, HashSet::new())
     }
@@ -599,7 +603,7 @@ impl ExtractedCommit {
         ctx: &CoreContext,
         reader: &GitRepoReader,
         submodules: bool,
-    ) -> impl Stream<Item = Result<BonsaiDiffFileChange<GitLeaf>, Error>> {
+    ) -> impl Stream<Item = Result<BonsaiDiffFileChange<(FileType, GitLeaf)>, Error>> {
         if submodules {
             self.diff_root_for_submodules::<true>(ctx, reader)
                 .left_stream()

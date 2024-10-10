@@ -497,7 +497,7 @@ function mononoke_admin_source_target {
 # Remove the glog prefix
 function strip_glog {
   # based on https://our.internmc.facebook.com/intern/wiki/LogKnock/Log_formats/#regex-for-glog
-  sed -E -e 's%^[VDIWECF][[:digit:]]{4} [[:digit:]]{2}:?[[:digit:]]{2}:?[[:digit:]]{2}(\.[[:digit:]]+)?\s+(([0-9a-f]+)\s+)?(\[([^]]+)\]\s+)?(\(([^\)]+)\)\s+)?(([a-zA-Z0-9_./-]+):([[:digit:]]+))\]\s+%%' \
+  sed -E -e 's%^[VDIWECFT][[:digit:]]{4} [[:digit:]]{2}:?[[:digit:]]{2}:?[[:digit:]]{2}(\.[[:digit:]]+)?\s+(([0-9a-f]+)\s+)?(\[([^]]+)\]\s+)?(\(([^\)]+)\)\s+)?(([a-zA-Z0-9_./-]+):([[:digit:]]+))\]\s+%%' \
   | grep -v "ODS3 SDK has dropped some samples." || true
 }
 
@@ -669,6 +669,7 @@ rust-checkout=false
 hg=ssh://user@dummy/{1}
 
 [cas]
+disable=false
 use-case=source-control-testing
 log-dir=$TESTTMP
 EOF
@@ -713,7 +714,8 @@ function set_bonsai_globalrev_mapping {
 }
 
 function set_mononoke_as_source_of_truth_for_git {
-  sqlite3 "$TESTTMP/monsql/sqlite_dbs" "REPLACE INTO git_repositories_source_of_truth (repo_id, repo_name, source_of_truth) VALUES (${REPO_ID:-0}, '${REPONAME}', 'mononoke')"
+  REPO_NAME_HEX=$(echo -n "${REPONAME}" | xxd -p)
+  sqlite3 "$TESTTMP/monsql/sqlite_dbs" "REPLACE INTO git_repositories_source_of_truth (repo_id, repo_name, source_of_truth) VALUES (${REPO_ID:-0}, X'${REPO_NAME_HEX}', 'mononoke')"
 }
 
 function setup_mononoke_config {
@@ -1271,6 +1273,27 @@ git_delta_manifest_v2_config.max_inlined_object_size = 20
 git_delta_manifest_v2_config.max_inlined_delta_size = 20
 git_delta_manifest_v2_config.delta_chunk_size = 1000
 CONFIG
+elif [[ -n "${NON_GIT_TYPES:-}" ]]; then
+  cat >> "repos/$reponame_urlencoded/server.toml" <<CONFIG
+[derived_data_config.available_configs.default]
+types=[
+  "blame",
+  "changeset_info",
+  "deleted_manifest",
+  "fastlog",
+  "filenodes",
+  "fsnodes",
+  "unodes",
+  "hgchangesets",
+  "hg_augmented_manifests",
+  "skeleton_manifests",
+  "skeleton_manifests_v2",
+  "bssm_v3",
+  "ccsm",
+  "test_manifests",
+  "test_sharded_manifests"
+]
+CONFIG
 else
   cat >> "repos/$reponame_urlencoded/server.toml" <<CONFIG
 [derived_data_config.available_configs.default]
@@ -1326,12 +1349,12 @@ backup_source_repo_name="$BACKUP_FROM"
 CONFIG
 fi
 
-if [[ -n "${ENABLE_API_WRITES:-}" ]]; then
-  cat >> "repos/$reponame_urlencoded/server.toml" <<CONFIG
+cat >> "repos/$reponame_urlencoded/server.toml" <<CONFIG
 [source_control_service]
-permit_writes = true
+permit_writes = ${SCS_PERMIT_WRITES:-true}
+permit_service_writes = ${SCS_PERMIT_SERVICE_WRITES:-true}
+permit_commits_without_parents = ${SCS_PERMIT_COMMITS_WITHOUT_PARENTS:-true}
 CONFIG
-fi
 
 if [[ -n "${SPARSE_PROFILES_LOCATION}" ]]; then
   cat >> "repos/$reponame_urlencoded/server.toml" <<CONFIG
@@ -1718,15 +1741,23 @@ function start_and_wait_for_land_service {
   wait_for_land_service
 }
 
-function megarepo_async_worker {
+function _megarepo_async_worker_cmd {
   GLOG_minloglevel=5 "$ASYNC_REQUESTS_WORKER" "$@" \
     --log-level INFO \
     --mononoke-config-path "$TESTTMP/mononoke-config" \
     --scuba-dataset "file://$TESTTMP/async-worker.json" \
     "${CACHE_ARGS[@]}" \
-    "${COMMON_ARGS[@]}" >> "$TESTTMP/megarepo_async_worker.out" 2>&1 &
+    "${COMMON_ARGS[@]}"
+}
+
+function megarepo_async_worker {
+  _megarepo_async_worker_cmd "$@" >> "$TESTTMP/megarepo_async_worker.out" 2>&1 &
   export MEGAREPO_ASYNC_WORKER_PID=$!
   echo "$MEGAREPO_ASYNC_WORKER_PID" >> "$DAEMON_PIDS"
+}
+
+function megarepo_async_worker_foreground {
+  _megarepo_async_worker_cmd "$@"
 }
 
 function scsc_as {
@@ -2210,6 +2241,30 @@ function default_setup() {
   cd repo2 || exit 1
   cat >> .hg/hgrc <<EOF
 [extensions]
+pushrebase =
+EOF
+}
+
+function default_setup_drawdag() {
+  setup_common_config "blob_files"
+
+  testtool_drawdag -R repo <<EOF
+C
+|
+B
+|
+A
+# bookmark: C "${MASTER_BOOKMARK:-master_bookmark}"
+EOF
+
+  start_and_wait_for_mononoke_server
+  hg clone -q "mono:repo" "$REPONAME" --noupdate
+  cd $REPONAME || exit 1
+  cat >> .hg/hgrc <<EOF
+[ui]
+ssh ="$DUMMYSSH"
+[extensions]
+amend =
 pushrebase =
 EOF
 }

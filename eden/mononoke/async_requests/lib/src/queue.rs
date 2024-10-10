@@ -15,13 +15,11 @@ use anyhow::Error;
 use blobstore::Blobstore;
 use blobstore::PutBehaviour;
 use blobstore::Storable;
-use bookmarks::BookmarkKey;
 use context::CoreContext;
 use futures::stream;
 use futures::StreamExt;
 use futures::TryStreamExt;
 use memblob::Memblob;
-use mononoke_api::Mononoke;
 use mononoke_api::MononokeRepo;
 use mononoke_types::BlobstoreKey as BlobstoreKeyTrait;
 use mononoke_types::RepositoryId;
@@ -30,22 +28,42 @@ use requests_table::BlobstoreKey;
 pub use requests_table::ClaimedBy;
 use requests_table::LongRunningRequestEntry;
 use requests_table::LongRunningRequestsQueue;
+use requests_table::QueueStats;
 pub use requests_table::RequestId;
 use requests_table::RequestType;
 pub use requests_table::RowId;
 use requests_table::SqlLongRunningRequestsQueue;
 use sql_construct::SqlConstruct;
+use stats::define_stats;
+use stats::prelude::TimeseriesStatic;
 
 use crate::error::AsyncRequestsError;
 use crate::types::AsynchronousRequestParams;
 use crate::types::AsynchronousRequestResult;
-use crate::types::IntoConfigFormat;
 use crate::types::Request;
 use crate::types::ThriftParams;
 use crate::types::Token;
 
 const INITIAL_POLL_DELAY_MS: u64 = 1000;
 const MAX_POLL_DURATION: Duration = Duration::from_secs(60);
+
+define_stats! {
+    prefix = "async_requests.queue";
+    complete_called: timeseries("complete.called"; Count),
+    complete_error: timeseries("complete.error"; Count),
+    complete_success: timeseries("complete.success"; Count),
+    dequeue_called: timeseries("dequeue.called"; Count),
+    dequeue_error: timeseries("dequeue.error"; Count),
+    dequeue_success: timeseries("dequeue.success"; Count),
+    enqueue_called: timeseries("enqueue.called"; Count),
+    enqueue_error: timeseries("enqueue.error"; Count),
+    enqueue_success: timeseries("enqueue.success"; Count),
+    poll_called: timeseries("poll.called"; Count),
+    poll_error: timeseries("poll.error"; Count),
+    poll_empty: timeseries("poll.empty"; Count),
+    poll_success: timeseries("poll.success"; Count),
+    poll_timeout: timeseries("poll.timeout"; Count),
+}
 
 #[derive(Clone)]
 pub struct AsyncMethodRequestQueue {
@@ -79,35 +97,59 @@ impl AsyncMethodRequestQueue {
         })
     }
 
-    pub async fn enqueue<P: ThriftParams, R: MononokeRepo>(
+    pub async fn enqueue<P: ThriftParams>(
         &self,
         ctx: &CoreContext,
-        mononoke: &Mononoke<R>,
+        repo_id: Option<&RepositoryId>,
         thrift_params: P,
     ) -> Result<<P::R as Request>::Token, Error> {
+        STATS::enqueue_called.add_value(1);
         let request_type = RequestType(P::R::NAME.to_owned());
-        let target = thrift_params
-            .target()?
-            .clone()
-            .into_config_format(mononoke)?;
-        let rust_params: AsynchronousRequestParams = thrift_params.into();
+        let rust_params = thrift_params.into();
+        self.enqueue_inner::<P>(ctx, repo_id, request_type, rust_params)
+            .await
+            .inspect(|_token| {
+                STATS::enqueue_success.add_value(1);
+            })
+            .inspect_err(|_err| {
+                STATS::enqueue_error.add_value(1);
+            })
+    }
+
+    async fn enqueue_inner<P: ThriftParams>(
+        &self,
+        ctx: &CoreContext,
+        repo_id: Option<&RepositoryId>,
+        request_type: RequestType,
+        rust_params: AsynchronousRequestParams,
+    ) -> Result<<P::R as Request>::Token, Error> {
         let params_object_id = rust_params.store(ctx, &self.blobstore).await?;
         let blobstore_key = BlobstoreKey(params_object_id.blobstore_key());
         let table_id = self
             .table
-            .add_request(
-                ctx,
-                &request_type,
-                &RepositoryId::new(i32::try_from(target.repo_id)?),
-                &BookmarkKey::new(&target.bookmark)?,
-                &blobstore_key,
-            )
+            .add_request(ctx, &request_type, repo_id, &blobstore_key)
             .await?;
         let token = <P::R as Request>::Token::from_db_id(table_id)?;
         Ok(token)
     }
 
     pub async fn dequeue(
+        &self,
+        ctx: &CoreContext,
+        claimed_by: &ClaimedBy,
+    ) -> Result<Option<(RequestId, AsynchronousRequestParams)>, AsyncRequestsError> {
+        STATS::dequeue_called.add_value(1);
+        self.dequeue_inner(ctx, claimed_by)
+            .await
+            .inspect(|_token| {
+                STATS::dequeue_success.add_value(1);
+            })
+            .inspect_err(|_err| {
+                STATS::dequeue_error.add_value(1);
+            })
+    }
+
+    pub async fn dequeue_inner(
         &self,
         ctx: &CoreContext,
         claimed_by: &ClaimedBy,
@@ -133,6 +175,23 @@ impl AsyncMethodRequestQueue {
     }
 
     pub async fn complete(
+        &self,
+        ctx: &CoreContext,
+        req_id: &RequestId,
+        result: AsynchronousRequestResult,
+    ) -> Result<bool, AsyncRequestsError> {
+        STATS::complete_called.add_value(1);
+        self.complete_inner(ctx, req_id, result)
+            .await
+            .inspect(|_token| {
+                STATS::complete_success.add_value(1);
+            })
+            .inspect_err(|_err| {
+                STATS::complete_error.add_value(1);
+            })
+    }
+
+    pub async fn complete_inner(
         &self,
         ctx: &CoreContext,
         req_id: &RequestId,
@@ -174,6 +233,20 @@ impl AsyncMethodRequestQueue {
         ctx: &CoreContext,
         token: T,
     ) -> Result<<T::R as Request>::PollResponse, AsyncRequestsError> {
+        STATS::poll_called.add_value(1);
+        self.poll_inner(ctx, token)
+            .await
+            // we don't bump poll_success here, we do it in poll_inner
+            .inspect_err(|_err| {
+                STATS::poll_error.add_value(1);
+            })
+    }
+
+    pub async fn poll_inner<T: Token>(
+        &self,
+        ctx: &CoreContext,
+        token: T,
+    ) -> Result<<T::R as Request>::PollResponse, AsyncRequestsError> {
         let mut backoff_ms = INITIAL_POLL_DELAY_MS;
         let before = Instant::now();
         let row_id = token.to_db_id()?;
@@ -187,12 +260,14 @@ impl AsyncMethodRequestQueue {
             match maybe_thrift_result {
                 Some(thrift_result) => {
                     // Nice, the result is ready!
+                    STATS::poll_success.add_value(1);
                     return Ok(<T::R as Request>::thrift_result_into_poll_response(
                         thrift_result,
                     ));
                 }
                 None if before.elapsed() + next_sleep > MAX_POLL_DURATION => {
                     // The result is not yet ready, but we're out of time
+                    STATS::poll_timeout.add_value(1);
                     return Ok(T::R::empty_poll_response());
                 }
                 None => {
@@ -333,6 +408,16 @@ impl AsyncMethodRequestQueue {
             Ok(None)
         }
     }
+
+    pub async fn get_queue_stats(
+        &self,
+        ctx: &CoreContext,
+    ) -> Result<QueueStats, AsyncRequestsError> {
+        self.table
+            .get_queue_stats(ctx, self.repos.as_deref())
+            .await
+            .map_err(AsyncRequestsError::internal)
+    }
 }
 
 #[cfg(test)]
@@ -341,6 +426,7 @@ mod tests {
     use fbinit::FacebookInit;
     use mononoke_api::Repo;
     use mononoke_macros::mononoke;
+    use repo_identity::RepoIdentityRef;
     use requests_table::ClaimedBy;
     use requests_table::RequestStatus;
     use source_control::MegarepoAddBranchingTargetParams as ThriftMegarepoAddBranchingTargetParams;
@@ -378,12 +464,11 @@ mod tests {
                 let q = AsyncMethodRequestQueue::new_test_in_memory().unwrap();
                 let ctx = CoreContext::test_mock(fb);
                 let repo: Repo = test_repo_factory::build_empty(ctx.fb).await?;
-                let mononoke =
-                    Mononoke::new_test(vec![("test".to_string(), repo)]).await?;
+                let repo_id = repo.repo_identity().id();
 
                 // Enqueue a request
                 let params = $thrift_params;
-                let token = q.enqueue(&ctx, &mononoke, params.clone()).await?;
+                let token = q.enqueue(&ctx, Some(&repo_id), params.clone()).await?;
 
                 // Verify that request metadata is in the db and has expected values
                 let row_id = token.to_db_id()?;
@@ -396,7 +481,7 @@ mod tests {
                 assert_eq!(entry.started_processing_at, None);
                 assert_eq!(entry.ready_at, None);
                 assert_eq!(entry.polled_at, None);
-                assert_eq!(entry.repo_id,  RepositoryId::new(0));
+                assert_eq!(entry.repo_id, Some(RepositoryId::new(0)));
                 assert_eq!(
                     entry.request_type,
                     RequestType($request_type.to_string())

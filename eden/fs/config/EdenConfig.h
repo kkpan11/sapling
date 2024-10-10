@@ -71,7 +71,7 @@ class EdenConfig : private ConfigSettingManager {
   EdenConfig& operator=(EdenConfig&& source) = delete;
 
   /**
-   * Create an EdenConfig for testing usage>
+   * Create an EdenConfig for testing usage
    */
   static std::shared_ptr<EdenConfig> createTestEdenConfig();
 
@@ -1003,6 +1003,15 @@ class EdenConfig : private ConfigSettingManager {
       this};
 
   /**
+   * Minimum interval between NFS stats updates in seconds. NFS stat collection
+   * only happens on macOS. Change this to 0 to disable NFS stat collection.
+   */
+  ConfigSetting<std::chrono::nanoseconds> updateNFSStatsInterval{
+      "telemetry:update-nfs-stats-interval",
+      std::chrono::seconds{60},
+      this};
+
+  /**
    * Controls which configs we want to send with the request logging.
    * The elements are full config keys, e.g. "hg:import-batch-size".
    * Elements not valid or not present in the config map are silently ignored.
@@ -1461,9 +1470,19 @@ class EdenConfig : private ConfigSettingManager {
   ConfigSetting<uint64_t> fsckLogFrequency{"fsck:log-frequency", 10000, this};
 
   /**
-   * Should FSCK be run on multiple threads, or serialized.
+   * Should FSCK be run on multiple threads, or serialized. This option is
+   * specific to Windows.
    */
   ConfigSetting<bool> multiThreadedFsck{"fsck:multi-threaded", true, this};
+
+  /**
+   * The number of threads that the OverlayChecker will use when performing
+   * error discovery.
+   */
+  ConfigSetting<uint64_t> fsckNumErrorDiscoveryThreads{
+      "fsck:num-error-discovery-threads",
+      4,
+      this};
 
   // [glob]
 
@@ -1567,6 +1586,16 @@ class EdenConfig : private ConfigSettingManager {
       {},
       this};
 
+  /**
+   * How often to automatically run the eden doctor.
+   * Defaults to 0 for now, so that we can run config based rollouts.
+   * 0 = eden doctor would not run at all.
+   */
+  ConfigSetting<std::chrono::nanoseconds> edenDoctorInterval{
+      "core:eden-doctor-interval",
+      std::chrono::hours(0),
+      this};
+
   // [rage]
   /**
    * The tool that will be used to upload eden rages. Only currently used in the
@@ -1590,12 +1619,12 @@ class EdenConfig : private ConfigSettingManager {
       std::nullopt,
       this};
 
-  // [facebook]
-  // Facebook internal
+// [facebook]
+// Facebook internal
 
-  /**
-   * (Facebook Internal) Determines if EdenFS should use ServiceRouter.
-   */
+/**
+ * (Facebook Internal) Determines if EdenFS should use ServiceRouter.
+ */
 #ifdef EDEN_HAVE_SERVICEROUTER
   ConfigSetting<bool> enableServiceRouter{
       "facebook:enable-service-router",

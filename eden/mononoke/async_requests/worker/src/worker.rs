@@ -21,7 +21,6 @@ use std::time::Duration;
 use anyhow::Context;
 use anyhow::Error;
 use async_requests::types::AsynchronousRequestParams;
-use async_requests::types::IntoConfigFormat;
 use async_requests::AsyncMethodRequestQueue;
 use async_requests::AsyncRequestsError;
 use async_requests::ClaimedBy;
@@ -39,7 +38,6 @@ use futures::stream::StreamExt;
 use futures::stream::TryStreamExt;
 use futures::Stream;
 use megarepo_api::MegarepoApi;
-use megarepo_config::Target;
 use mononoke_api::MononokeRepo;
 use mononoke_api::RepositoryId;
 use mononoke_app::MononokeApp;
@@ -47,6 +45,9 @@ use mononoke_types::Timestamp;
 use slog::debug;
 use slog::error;
 use slog::info;
+use slog::warn;
+use stats::define_stats;
+use stats::prelude::*;
 
 use crate::methods::megarepo_async_request_compute;
 
@@ -55,6 +56,22 @@ const DEQUEUE_STREAM_SLEEP_TIME: u64 = 1000;
 // if it hasn't updated inprogress timestamp
 const ABANDONED_REQUEST_THRESHOLD_SECS: i64 = 5 * 60;
 const KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(10);
+const STATS_LOOP_INTERNAL: Duration = Duration::from_secs(5 * 60);
+
+define_stats! {
+    prefix = "async_requests.worker";
+    dequeue_called: timeseries("dequeue.called"; Count),
+    dequeue_error: timeseries("dequeue.error"; Count),
+    process_aborted: timeseries("process.aborted"; Count),
+    process_complete_failed: timeseries("process.complete.failed"; Count),
+    process_failed: timeseries("process.failed"; Count),
+    process_succeeded: timeseries("process.succeeded"; Count),
+    requested: timeseries("requested"; Count),
+
+    stats_error: timeseries("stats.error"; Count),
+    queue_length_by_status: dynamic_singleton_counter("stats.queue.length.{}", (status: String)),
+    queue_age_by_status: dynamic_singleton_counter("stats.queue.age_s.{}", (status: String)),
+}
 
 #[derive(Clone)]
 pub struct AsyncMethodRequestWorker<R> {
@@ -99,6 +116,13 @@ impl<R: MononokeRepo> AsyncMethodRequestWorker<R> {
     ) -> Result<(), AsyncRequestsError> {
         let queue = self.queues_client.async_method_request_queue(ctx).await?;
 
+        // Start the stats logger loop
+        let (stats, stats_abort_handle) = abortable({
+            cloned!(ctx, queue);
+            async move { Self::stats_loop(&ctx, &queue).await }
+        });
+        let _stats = tokio::spawn(stats);
+
         // Build stream that pools all the queues
         let request_stream = self.request_stream(ctx.clone(), queue, will_exit).boxed();
 
@@ -123,6 +147,9 @@ impl<R: MononokeRepo> AsyncMethodRequestWorker<R> {
                 Ok(())
             })
             .await?;
+
+        stats_abort_handle.abort();
+
         Ok(())
     }
 
@@ -156,6 +183,8 @@ impl<R: MononokeRepo> AsyncMethodRequestWorker<R> {
     {
         try_stream! {
             'outer: loop {
+                STATS::dequeue_called.add_value(1);
+
                 let mut yielded = false;
                 Self::cleanup_abandoned_requests(
                     &ctx,
@@ -166,7 +195,16 @@ impl<R: MononokeRepo> AsyncMethodRequestWorker<R> {
                 if will_exit.load(Ordering::Relaxed) {
                     break 'outer;
                 }
-                if let Some((request_id, params)) = queue.dequeue(&ctx, &claimed_by).await? {
+                let res = queue.dequeue(&ctx, &claimed_by).await;
+                if res.is_err() {
+                    STATS::dequeue_error.add_value(1);
+                    warn!(
+                        ctx.logger(),
+                        "error while dequeueing, skipping: {}", res.err().unwrap()
+                    );
+                    continue;
+                }
+                if let Some((request_id, params)) = res? {
                     yield (request_id, params);
                     yielded = true;
                 }
@@ -225,15 +263,13 @@ impl<R: MononokeRepo> AsyncMethodRequestWorker<R> {
         req_id: RequestId,
         params: AsynchronousRequestParams,
     ) -> Result<bool, AsyncRequestsError> {
-        let target = params
-            .target()?
-            .clone()
-            .into_config_format(&self.megarepo.mononoke())?;
+        let target = params.target()?;
         let queue = self.queues_client.async_method_request_queue(&ctx).await?;
 
         let ctx = self.prepare_ctx(&ctx, &req_id, &target);
 
         // Do the actual work.
+        STATS::requested.add_value(1);
         let work_fut = megarepo_async_request_compute(&ctx, &self.megarepo, params);
 
         // Start the loop that would keep saying that request is still being
@@ -260,29 +296,49 @@ impl<R: MononokeRepo> AsyncMethodRequestWorker<R> {
                     .log_with_msg("Request complete, saving result", None);
 
                 // Save the result.
-                let updated_res = queue.complete(&ctx, &req_id, result).await;
+                match result {
+                    Ok(result) => {
+                        STATS::process_succeeded.add_value(1);
+                        let updated_res = queue.complete(&ctx, &req_id, result).await;
+                        let updated = match updated_res {
+                            Ok(updated) => {
+                                info!(ctx.logger(), "[{}] result saved", &req_id.0);
+                                ctx.scuba().clone().log_with_msg("Result saved", None);
+                                updated
+                            }
+                            Err(err) => {
+                                STATS::process_complete_failed.add_value(1);
+                                ctx.scuba().clone().log_with_msg(
+                                    "Failed to save result",
+                                    Some(format!("{:?}", err)),
+                                );
+                                return Err(err);
+                            }
+                        };
 
-                let updated = match updated_res {
-                    Ok(updated) => {
-                        info!(ctx.logger(), "[{}] result saved", &req_id.0);
-                        ctx.scuba().clone().log_with_msg("Result saved", None);
-                        updated
+                        Ok(updated)
                     }
                     Err(err) => {
+                        STATS::process_failed.add_value(1);
+                        info!(
+                            ctx.logger(),
+                            "[{}] worker failed to process request, will retry: {:?}",
+                            &req_id.0,
+                            err
+                        );
                         ctx.scuba()
                             .clone()
-                            .log_with_msg("Failed to save result", Some(format!("{:?}", err)));
-                        return Err(err);
+                            .log_with_msg("Failed to process request", Some(format!("{:?}", err)));
+                        Ok(false)
                     }
-                };
-
-                Ok(updated)
+                }
             }
             Either::Right((res, _)) => {
                 // We haven't completed the request, and failed to update
                 // inprogress timestamp. Most likely it means that other
                 // worker has completed it
 
+                STATS::process_aborted.add_value(1);
                 res.map_err(AsyncRequestsError::internal)?
                     .map_err(AsyncRequestsError::internal)?;
                 info!(
@@ -294,7 +350,7 @@ impl<R: MononokeRepo> AsyncMethodRequestWorker<R> {
         }
     }
 
-    fn prepare_ctx(&self, ctx: &CoreContext, req_id: &RequestId, target: &Target) -> CoreContext {
+    fn prepare_ctx(&self, ctx: &CoreContext, req_id: &RequestId, target: &str) -> CoreContext {
         let ctx = ctx.with_mutated_scuba(|mut scuba| {
             scuba.add("request_id", req_id.0.0);
             scuba
@@ -302,12 +358,7 @@ impl<R: MononokeRepo> AsyncMethodRequestWorker<R> {
 
         info!(
             ctx.logger(),
-            "[{}] new request:  id: {}, type: {}, repo_id: {}, bookmark: {}",
-            &req_id.0,
-            &req_id.0,
-            &req_id.1,
-            &target.repo_id,
-            &target.bookmark,
+            "[{}] new request:  id: {}, type: {}, {}", &req_id.0, &req_id.0, &req_id.1, target,
         );
 
         ctx
@@ -350,6 +401,37 @@ impl<R: MononokeRepo> AsyncMethodRequestWorker<R> {
             tokio::time::sleep(KEEP_ALIVE_INTERVAL).await;
         }
     }
+
+    async fn stats_loop(ctx: &CoreContext, queue: &AsyncMethodRequestQueue) {
+        loop {
+            let now = Timestamp::now();
+            let res = queue.get_queue_stats(ctx).await;
+            match res {
+                Ok(res) => {
+                    for (status, count) in res.queue_length_by_status.iter() {
+                        STATS::queue_length_by_status.set_value(
+                            ctx.fb,
+                            *count as i64,
+                            (status.to_string(),),
+                        );
+                    }
+                    for (status, ts) in res.queue_age_by_status.iter() {
+                        let diff = now.timestamp_seconds() - ts.timestamp_seconds();
+                        STATS::queue_age_by_status.set_value(ctx.fb, diff, (status.to_string(),));
+                    }
+                }
+                Err(err) => {
+                    STATS::stats_error.add_value(1);
+                    warn!(
+                        ctx.logger(),
+                        "error while getting queue stats, skipping: {}", err
+                    );
+                }
+            }
+
+            tokio::time::sleep(STATS_LOOP_INTERNAL).await;
+        }
+    }
 }
 
 #[cfg(test)]
@@ -358,7 +440,6 @@ mod test {
 
     use anyhow::Error;
     use fbinit::FacebookInit;
-    use mononoke_api::Mononoke;
     use mononoke_api::Repo;
     use mononoke_macros::mononoke;
     use requests_table::RequestType;
@@ -370,8 +451,6 @@ mod test {
     async fn test_request_stream_simple(fb: FacebookInit) -> Result<(), Error> {
         let q = AsyncMethodRequestQueue::new_test_in_memory().unwrap();
         let ctx = CoreContext::test_mock(fb);
-        let repo: Repo = test_repo_factory::build_empty(ctx.fb).await?;
-        let mononoke = Mononoke::new_test(vec![("test".to_string(), repo)]).await?;
 
         let params = thrift::MegarepoSyncChangesetParams {
             cs_id: vec![],
@@ -384,7 +463,7 @@ mod test {
             target_location: vec![],
             ..Default::default()
         };
-        q.enqueue(&ctx, &mononoke, params).await?;
+        q.enqueue(&ctx, None, params).await?;
 
         let will_exit = Arc::new(AtomicBool::new(false));
         let s = AsyncMethodRequestWorker::<Repo>::request_stream_inner(
@@ -412,8 +491,6 @@ mod test {
     async fn test_request_stream_clear_abandoned(fb: FacebookInit) -> Result<(), Error> {
         let q = AsyncMethodRequestQueue::new_test_in_memory().unwrap();
         let ctx = CoreContext::test_mock(fb);
-        let repo: Repo = test_repo_factory::build_empty(ctx.fb).await?;
-        let mononoke = Mononoke::new_test(vec![("test".to_string(), repo)]).await?;
 
         let params = thrift::MegarepoSyncChangesetParams {
             cs_id: vec![],
@@ -426,7 +503,7 @@ mod test {
             target_location: vec![],
             ..Default::default()
         };
-        q.enqueue(&ctx, &mononoke, params).await?;
+        q.enqueue(&ctx, None, params).await?;
 
         // Grab it from the queue...
         let dequed = q.dequeue(&ctx, &ClaimedBy("name".to_string())).await?;

@@ -42,7 +42,6 @@ pub(crate) use self::types::LazyFile;
 pub use self::types::StoreFile;
 use crate::datastore::HgIdDataStore;
 use crate::datastore::HgIdMutableDeltaStore;
-use crate::datastore::RemoteDataStore;
 use crate::indexedlogauxstore::AuxStore;
 use crate::indexedlogdatastore::Entry;
 use crate::indexedlogdatastore::IndexedLogHgIdDataStore;
@@ -50,18 +49,14 @@ use crate::lfs::lfs_from_hg_file_blob;
 use crate::lfs::LfsClient;
 use crate::lfs::LfsPointersEntry;
 use crate::lfs::LfsStore;
-use crate::remotestore::HgIdRemoteStore;
 use crate::scmstore::activitylogger::ActivityLogger;
 use crate::scmstore::fetch::FetchResults;
 use crate::scmstore::metrics::StoreLocation;
 use crate::ContentDataStore;
 use crate::ContentMetadata;
 use crate::Delta;
-use crate::ExtStoredPolicy;
-use crate::LegacyStore;
 use crate::LocalStore;
 use crate::Metadata;
-use crate::MultiplexDeltaStore;
 use crate::SaplingRemoteApiFileStore;
 use crate::StoreKey;
 use crate::StoreResult;
@@ -70,7 +65,6 @@ use crate::StoreResult;
 pub struct FileStore {
     // Config
     // TODO(meyer): Move these to a separate config struct with default impl, etc.
-    pub(crate) extstored_policy: ExtStoredPolicy,
     pub(crate) lfs_threshold_bytes: Option<u64>,
     pub(crate) edenapi_retries: i32,
     /// Allow explicitly writing serialized LFS pointers outside of tests
@@ -210,19 +204,11 @@ impl FileStore {
 
             if fetch_local {
                 if let Some(ref indexedlog_cache) = indexedlog_cache {
-                    state.fetch_indexedlog(
-                        indexedlog_cache,
-                        lfs_cache.as_ref().map(|v| v.as_ref()),
-                        StoreLocation::Cache,
-                    );
+                    state.fetch_indexedlog(indexedlog_cache, StoreLocation::Cache);
                 }
 
                 if let Some(ref indexedlog_local) = indexedlog_local {
-                    state.fetch_indexedlog(
-                        indexedlog_local,
-                        lfs_local.as_ref().map(|v| v.as_ref()),
-                        StoreLocation::Local,
-                    );
+                    state.fetch_indexedlog(indexedlog_local, StoreLocation::Local);
                 }
 
                 if let Some(ref lfs_cache) = lfs_cache {
@@ -415,7 +401,6 @@ impl FileStore {
 
     pub fn empty() -> Self {
         FileStore {
-            extstored_policy: ExtStoredPolicy::Ignore,
             lfs_threshold_bytes: None,
             edenapi_retries: 0,
             allow_write_lfs_ptrs: false,
@@ -462,7 +447,6 @@ impl FileStore {
         );
 
         Self {
-            extstored_policy: self.extstored_policy.clone(),
             lfs_threshold_bytes: self.lfs_threshold_bytes.clone(),
             edenapi_retries: self.edenapi_retries.clone(),
             allow_write_lfs_ptrs: self.allow_write_lfs_ptrs,
@@ -492,34 +476,15 @@ impl FileStore {
             flush_on_drop: true,
         }
     }
-}
 
-impl FileStore {
-    pub(crate) fn get_file_content_impl(
-        &self,
-        key: &Key,
-        fetch_mode: FetchMode,
-    ) -> Result<Option<Bytes>> {
-        self.metrics.write().api.hg_getfilecontent.call(0);
-        self.fetch(
-            std::iter::once(key.clone()),
-            FileAttributes::CONTENT,
-            fetch_mode,
-        )
-        .single()?
-        .map(|entry| entry.content.unwrap().file_content())
-        .transpose()
-    }
-}
-
-impl LegacyStore for FileStore {
-    /// For compatibility with ContentStore::get_shared_mutable
-    fn get_shared_mutable(&self) -> Arc<dyn HgIdMutableDeltaStore> {
-        Arc::new(self.with_shared_only())
-    }
-
-    fn get_file_content(&self, key: &Key) -> Result<Option<Bytes>> {
-        self.get_file_content_impl(key, FetchMode::AllowRemote)
+    // Returns keys that weren't found locally.
+    pub fn upload_lfs(&self, keys: &[StoreKey]) -> Result<Vec<StoreKey>> {
+        self.metrics.write().api.hg_upload.call(keys.len());
+        if let Some(ref lfs_remote) = self.lfs_remote {
+            lfs_remote.upload(keys)
+        } else {
+            Ok(keys.to_vec())
+        }
     }
 }
 
@@ -593,37 +558,6 @@ impl FileStore {
         }
 
         Ok(missing)
-    }
-}
-
-impl RemoteDataStore for FileStore {
-    fn prefetch(&self, keys: &[StoreKey]) -> Result<Vec<StoreKey>> {
-        let missing = self
-            .prefetch(
-                keys.iter()
-                    .cloned()
-                    .filter_map(|sk| sk.maybe_into_key())
-                    .collect(),
-            )?
-            .into_iter()
-            .map(StoreKey::HgId)
-            .collect();
-        Ok(missing)
-    }
-
-    fn upload(&self, keys: &[StoreKey]) -> Result<Vec<StoreKey>> {
-        self.metrics.write().api.hg_upload.call(keys.len());
-        // TODO(meyer): Eliminate usage of legacy API, or at least minimize it (do we really need multiplex, etc)
-        if let Some(ref lfs_remote) = self.lfs_remote {
-            let mut multiplex = MultiplexDeltaStore::new();
-            multiplex.add_store(self.get_shared_mutable());
-            lfs_remote
-                .clone()
-                .datastore(Arc::new(multiplex))
-                .upload(keys)
-        } else {
-            Ok(keys.to_vec())
-        }
     }
 }
 

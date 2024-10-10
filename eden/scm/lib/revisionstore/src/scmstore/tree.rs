@@ -41,7 +41,7 @@ use storemodel::TreeEntry;
 
 pub use self::metrics::TreeStoreMetrics;
 use crate::datastore::HgIdDataStore;
-use crate::datastore::RemoteDataStore;
+use crate::historystore::HistoryStore;
 use crate::indexedlogdatastore::Entry;
 use crate::indexedlogdatastore::IndexedLogHgIdDataStore;
 use crate::indexedlogtreeauxstore::TreeAuxStore;
@@ -59,9 +59,9 @@ use crate::HgIdHistoryStore;
 use crate::HgIdMutableDeltaStore;
 use crate::HgIdMutableHistoryStore;
 use crate::IndexedLogHgIdHistoryStore;
-use crate::LegacyStore;
 use crate::LocalStore;
 use crate::Metadata;
+use crate::RemoteHistoryStore;
 use crate::SaplingRemoteApiTreeStore;
 use crate::StoreKey;
 use crate::StoreResult;
@@ -247,6 +247,8 @@ impl TreeStore {
                 if let Some(tree_aux_store) = &tree_aux_store {
                     let mut wants_aux = TreeAttributes::AUX_DATA;
                     if cas_client.is_some() {
+                        // We need the tree aux data in order to fetch from CAS, so fetch
+                        // tree aux data for any key we want CONTENT for.
                         wants_aux |= TreeAttributes::CONTENT;
                     }
                     let pending: Vec<_> = state
@@ -411,18 +413,14 @@ impl TreeStore {
     pub fn refresh(&self) -> Result<()> {
         self.flush()
     }
-}
 
-impl LegacyStore for TreeStore {
-    /// Returns only the local cache / shared stores, in place of the local-only stores, such that writes will go directly to the local cache.
-    /// For compatibility with ContentStore::get_shared_mutable
-    fn get_shared_mutable(&self) -> Arc<dyn HgIdMutableDeltaStore> {
+    pub fn with_shared_only(&self) -> Self {
         // this is infallible in ContentStore so panic if there are no shared/cache stores.
         assert!(
             self.indexedlog_cache.is_some(),
             "cannot get shared_mutable, no shared / local cache stores available"
         );
-        Arc::new(TreeStore {
+        Self {
             indexedlog_local: self.indexedlog_cache.clone(),
             indexedlog_cache: None,
             historystore_local: self.historystore_cache.clone(),
@@ -437,13 +435,19 @@ impl LegacyStore for TreeStore {
             fetch_tree_aux_data: false,
             metrics: self.metrics.clone(),
             prefetch_tree_parents: false,
-        })
+        }
     }
 
-    fn get_file_content(&self, _key: &Key) -> Result<Option<Bytes>> {
-        unimplemented!(
-            "get_file_content is not implemented for trees, it should only ever be falled for files"
-        );
+    pub fn prefetch(&self, keys: Vec<Key>) -> Result<Vec<Key>> {
+        Ok(self
+            .fetch_batch(
+                keys.into_iter(),
+                TreeAttributes::CONTENT,
+                FetchMode::AllowRemote,
+            )
+            .missing()?
+            .into_iter()
+            .collect())
     }
 }
 
@@ -485,25 +489,6 @@ impl HgIdDataStore for TreeStore {
 
     fn refresh(&self) -> Result<()> {
         self.refresh()
-    }
-}
-
-impl RemoteDataStore for TreeStore {
-    fn prefetch(&self, keys: &[StoreKey]) -> Result<Vec<StoreKey>> {
-        Ok(self
-            .fetch_batch(
-                keys.iter().cloned().filter_map(StoreKey::maybe_into_key),
-                TreeAttributes::CONTENT,
-                FetchMode::AllowRemote,
-            )
-            .missing()?
-            .into_iter()
-            .map(StoreKey::HgId)
-            .collect())
-    }
-
-    fn upload(&self, keys: &[StoreKey]) -> Result<Vec<StoreKey>> {
-        Ok(keys.to_vec())
     }
 }
 
@@ -612,6 +597,24 @@ impl HgIdMutableHistoryStore for TreeStore {
     fn flush(&self) -> Result<Option<Vec<PathBuf>>> {
         self.flush()?;
         Ok(None)
+    }
+}
+
+impl RemoteHistoryStore for TreeStore {
+    fn prefetch(&self, keys: &[StoreKey]) -> Result<()> {
+        self.fetch_batch(
+            keys.iter().filter_map(StoreKey::maybe_as_key).cloned(),
+            TreeAttributes::PARENTS,
+            FetchMode::AllowRemote,
+        )
+        .missing()?;
+        Ok(())
+    }
+}
+
+impl HistoryStore for TreeStore {
+    fn with_shared_only(&self) -> Arc<dyn HistoryStore> {
+        Arc::new(self.with_shared_only())
     }
 }
 

@@ -1,12 +1,10 @@
 # This needs to use native. to define a UDR.
 # @lint-ignore-every BUCKLINT
 
-load("@fbcode_macros//build_defs:custom_rule.bzl", "custom_rule")
 load("@fbcode_macros//build_defs:custom_unittest.bzl", "custom_unittest")
 load("@fbcode_macros//build_defs/lib:rust_common.bzl", "rust_common")
 load("@fbcode_macros//build_defs/lib:rust_oss.bzl", "rust_oss")
 load("@fbcode_macros//build_defs/lib:test_utils.bzl", "test_utils")
-load("@fbsource//tools/build_defs/buck2:is_buck2.bzl", "is_buck2")
 load(
     "//eden/mononoke/tests/integration/facebook:symlink.bzl",
     "symlink",
@@ -40,7 +38,7 @@ MONONOKE_TARGETS_TO_ENV = {
     "//eden/mononoke/mononoke_hg_sync_job:mononoke_hg_sync_job": "MONONOKE_HG_SYNC",
     "//eden/mononoke/repo_import:repo_import": "MONONOKE_REPO_IMPORT",
     "//eden/mononoke/scs/client:scsc": "SCS_CLIENT",
-    "//eden/mononoke/scs_server:scs_server": "SCS_SERVER",
+    "//eden/mononoke/scs/scs_server:scs_server": "SCS_SERVER",
     "//eden/mononoke/streaming_clone:new_streaming_clone": "MONONOKE_STREAMING_CLONE",
     "//eden/mononoke/tools/admin:newadmin": "MONONOKE_NEWADMIN",
     "//eden/mononoke/tools/example:example": "MONONOKE_EXAMPLE",
@@ -79,18 +77,14 @@ DOTT_DEPS = {
     "//eden/scm/tests:dummyssh3": "DUMMYSSH",
     # The underlying hg test runner code we depend upon
     "//eden/scm/tests:test_runner": "RUN_TESTS_LIBRARY",
-}
-
-DOTT_HG = {
+    # hg binary used in prod, includes CAS
     "//eden/scm:hg": "BINARY_HG",
     # The version of python to run
     "//eden/scm:hgpython": "BINARY_HGPYTHON",
 }
 
-DOTT_HG_CAS = {
-    "//eden/scm:hg_cas": "BINARY_HG",
-    # The version of python to run
-    "//eden/scm:hgpython_cas": "BINARY_HGPYTHON",
+DOTT_ASYNC_WORKER = {
+    "//eden/mononoke/async_requests:worker": "ASYNC_REQUESTS_WORKER",
 }
 
 DISABLE_ALL_NETWORK_ACCESS_DEPS = {
@@ -123,17 +117,17 @@ def _generate_manifest_impl(ctx):
         },
     )]
 
-generate_manifest = native.rule(
+generate_manifest = rule(
     impl = _generate_manifest_impl,
     attrs = {
-        "env": native.attrs.dict(
-            key = native.attrs.string(),
-            value = native.attrs.arg(),
+        "env": attrs.dict(
+            key = attrs.string(),
+            value = attrs.arg(),
         ),
-        "filename": native.attrs.string(),
-        "generator": native.attrs.exec_dep(),
+        "filename": attrs.string(),
+        "generator": attrs.exec_dep(),
     },
-) if is_buck2() else None
+)
 
 def custom_manifest_rule(name, manifest_file, targets):
     if rust_oss.is_oss_build():
@@ -157,28 +151,17 @@ def custom_manifest_rule(name, manifest_file, targets):
 
     env = {k: "$(location %s)" % v for k, v in targets.items()}
 
-    if is_buck2():
-        generate_manifest(
-            name = name,
-            generator = "//eden/mononoke/tests/integration/facebook:generate_manifest",
-            env = env,
-            filename = manifest_file,
-        )
-    else:
-        custom_rule(
-            name = name,
-            add_install_dir = False,
-            build_args = " ".join([manifest_file] + list(targets.keys())),
-            build_script_dep = "//eden/mononoke/tests/integration/facebook:generate_manifest",
-            env = env,
-            output_gen_files = [manifest_file],
-            strict = True,
-        )
+    generate_manifest(
+        name = name,
+        generator = "//eden/mononoke/tests/integration/facebook:generate_manifest",
+        env = env,
+        filename = manifest_file,
+    )
 
     return list(targets.values())
 
-def dott_test(name, dott_files, deps, use_mysql = False, disable_all_network_access_target = True, enable_sapling_cas = False):
-    _dott_test(name, dott_files, deps, use_mysql, False, enable_sapling_cas = enable_sapling_cas)
+def dott_test(name, dott_files, deps, use_mysql = False, disable_all_network_access_target = True, enable_async_requests_worker = False):
+    _dott_test(name, dott_files, deps, use_mysql, False, enable_async_requests_worker = enable_async_requests_worker)
 
     if use_mysql:
         # NOTE: We need network to talk to MySQL
@@ -186,9 +169,9 @@ def dott_test(name, dott_files, deps, use_mysql = False, disable_all_network_acc
 
     if disable_all_network_access_target:
         # there's not much sense in blocking network for OSS builds
-        _dott_test(name + "-disable-all-network-access", dott_files, deps, use_mysql, disable_all_network_access = True, rust_allow_oss_build = False, enable_sapling_cas = enable_sapling_cas)
+        _dott_test(name + "-disable-all-network-access", dott_files, deps, use_mysql, disable_all_network_access = True, rust_allow_oss_build = False, enable_async_requests_worker = enable_async_requests_worker)
 
-def _dott_test(name, dott_files, deps, use_mysql = False, disable_all_network_access = True, rust_allow_oss_build = None, enable_sapling_cas = False):
+def _dott_test(name, dott_files, deps, use_mysql = False, disable_all_network_access = True, rust_allow_oss_build = None, enable_async_requests_worker = False):
     manifest_target = name + "-manifest"
 
     noop_for_oss = rust_common.is_noop_in_oss_build(rust_allow_oss_build)
@@ -214,10 +197,10 @@ def _dott_test(name, dott_files, deps, use_mysql = False, disable_all_network_ac
 
     targets = {}
     dott_deps = DOTT_DEPS
-    if not enable_sapling_cas:
-        dott_deps = dott_deps | DOTT_HG
-    else:
-        dott_deps = dott_deps | DOTT_HG_CAS
+
+    if enable_async_requests_worker:
+        dott_deps = dott_deps | DOTT_ASYNC_WORKER
+
     for d in deps:
         # test runner takes sybolic names not targets, map from targets to the placeholder names
         if d in dott_deps:

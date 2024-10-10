@@ -24,6 +24,7 @@ from typing import Dict, List, Optional, Set, Tuple
 
 import bindings
 from bindings import renderdag
+
 from sapling import tracing
 from sapling.ext.extlib.phabricator import PHABRICATOR_COMMIT_MESSAGE_TAGS
 
@@ -1166,7 +1167,6 @@ def makefileobj(
     modemap=None,
     pathname=None,
 ):
-
     writable = mode not in ("r", "rb")
 
     if isstdiofilename(pat):
@@ -1728,9 +1728,6 @@ def tryimportone(ui, repo, hunk, parents, opts, msgs, updatefunc):
             if p2 != parents[1]:
                 repo.setparents(p1.node(), p2.node())
 
-            if opts.get("exact"):
-                repo.dirstate.setbranch(branch or "default")
-
             partial = opts.get("partial", False)
             files = set()
             try:
@@ -1780,10 +1777,6 @@ def tryimportone(ui, repo, hunk, parents, opts, msgs, updatefunc):
                     for idfunc in extrapostimport:
                         extrapostimportmap[idfunc](repo[n])
         else:
-            if opts.get("exact"):
-                branch = branch or "default"
-            else:
-                branch = p1.branch()
             store = patch.filestore()
             try:
                 files = set()
@@ -1805,7 +1798,6 @@ def tryimportone(ui, repo, hunk, parents, opts, msgs, updatefunc):
                     filectxfn=store,
                     user=user,
                     date=date,
-                    branch=branch,
                     editor=editor,
                 )
                 n = memctx.commit()
@@ -1850,7 +1842,6 @@ def _exportsingle(
 
     node = scmutil.binnode(ctx)
     parents = [p.node() for p in ctx.parents() if p]
-    branch = ctx.branch()
     if switch_parent:
         parents.reverse()
 
@@ -1863,8 +1854,6 @@ def _exportsingle(
     writestr("# User %s\n" % ctx.user())
     writestr("# Date %d %d\n" % ctx.date())
     writestr("#      %s\n" % util.datestr(ctx.date()))
-    if branch and branch != "default":
-        writestr("# Branch %s\n" % branch)
     writestr("# Node ID %s\n" % hex(node))
     writestr("# Parent  %s\n" % hex(prev))
     if len(parents) > 1:
@@ -2109,18 +2098,7 @@ class changeset_printer:
                 label=_changesetlabels(ctx),
             )
 
-        # branches are shown first before any other names due to backwards
-        # compatibility
-        branch = ctx.branch()
-        # don't show the default branch name
-        if branch != "default":
-            self.ui.write(columns["branch"] % branch, label="log.branch")
-
         for nsname, ns in self.repo.names.items():
-            # branches has special logic already handled above, so here we just
-            # skip it
-            if nsname == "branches":
-                continue
             # we will use the templatename as the color name since those two
             # should be the same
             for name in ns.names(self.repo, changenode):
@@ -2253,7 +2231,7 @@ class jsonchangeset(changeset_printer):
 
         self.ui.write(_x('\n  "rev": %s') % jrev)
         self.ui.write(_x(',\n  "node": %s') % jnode)
-        self.ui.write(_x(',\n  "branch": %s') % j(ctx.branch()))
+        self.ui.write(_x(',\n  "branch": %s') % j("default"))
         self.ui.write(_x(',\n  "phase": "%s"') % ctx.phasestr())
         self.ui.write(_x(',\n  "user": %s') % j(ctx.user()))
         date = ctx.date()
@@ -4423,8 +4401,6 @@ def buildcommittext(repo, ctx, summaryfooter=""):
     edittext.append(hgprefix(_("user: %s") % ctx.user()))
     if ctx.p2():
         edittext.append(hgprefix(_("branch merge")))
-    if ctx.branch():
-        edittext.append(hgprefix(_("branch '%s'") % ctx.branch()))
     if bookmarks.isactivewdirparent(repo):
         edittext.append(hgprefix(_("bookmark '%s'") % repo._activebookmark))
     edittext.extend([hgprefix(_("added %s") % f) for f in added])
@@ -4437,16 +4413,10 @@ def buildcommittext(repo, ctx, summaryfooter=""):
     return "\n".join(edittext)
 
 
-def commitstatus(repo, node, branch, opts=None):
+def commitstatus(repo, node, opts=None):
     if opts is None:
         opts = {}
     ctx = repo[node]
-    parents = ctx.parents()
-
-    if not opts.get("close_branch"):
-        for r in parents:
-            if r.closesbranch() and r.branch() == branch:
-                repo.ui.status(_("reopening closed branch head %d\n") % r)
 
     if repo.ui.debugflag:
         repo.ui.write(_("committed %s\n") % (ctx.hex()))
@@ -4867,7 +4837,6 @@ def _performrevert(
         originalchunks = patch.parsepatch(diff)
 
         try:
-
             chunks, opts = recordfilter(repo.ui, originalchunks, operation=operation)
             if reversehunks:
                 chunks = patch.reversehunks(chunks)
@@ -4975,7 +4944,7 @@ def howtocontinue(repo):
     for f, msg in afterresolvedstates:
         if repo.localvfs.exists(f):
             return contmsg % msg, True
-    if repo[None].dirty(missing=True, merge=False, branch=False):
+    if repo[None].dirty(missing=True, merge=False):
         return contmsg % _("@prog@ commit"), False
     return None, None
 

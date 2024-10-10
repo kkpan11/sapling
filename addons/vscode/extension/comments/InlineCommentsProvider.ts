@@ -6,16 +6,30 @@
  */
 
 import type {VSCodeRepo, VSCodeReposList} from '../VSCodeRepo';
+import type {ClientToServerMessage, ServerToClientMessage} from './types';
 import type {CodeReviewProvider, DiffSummaries} from 'isl-server/src/CodeReviewProvider';
 import type {RepositoryContext} from 'isl-server/src/serverTypes';
 import type {CommitInfo, DiffComment} from 'isl/src/types';
 
+import {getWebviewOptions, htmlForWebview} from '../htmlForWebview';
+import computeLineHeight from './computeLineHeight';
+import {isMac} from 'isl-components/OperatingSystem';
 import * as vscode from 'vscode';
+import {workspace} from 'vscode';
 
 export class InlineCommentsProvider implements vscode.Disposable {
   private disposables: Array<vscode.Disposable> = [];
   private repoDisposables: Array<vscode.Disposable> = [];
-  constructor(private reposList: VSCodeReposList, private ctx: RepositoryContext) {
+  constructor(
+    private extensionContext: vscode.ExtensionContext,
+    private reposList: VSCodeReposList,
+    private ctx: RepositoryContext,
+  ) {
+    const config = 'sapling.showDiffComments';
+    if (!workspace.getConfiguration().get<boolean>(config)) {
+      return;
+    }
+
     this.disposables.push(
       this.reposList.observeActiveRepos(repos => {
         for (const repo of repos) {
@@ -33,7 +47,9 @@ export class InlineCommentsProvider implements vscode.Disposable {
         return;
       }
 
-      this.repoDisposables.push(new InlineCommentsForRepo(repo, provider, this.ctx));
+      this.repoDisposables.push(
+        new InlineCommentsForRepo(this.extensionContext, repo, provider, this.ctx),
+      );
     }
   }
 
@@ -46,7 +62,7 @@ declare module 'vscode' {
   export interface WebviewEditorInset {
     readonly editor: TextEditor;
     readonly line: number;
-    readonly height: number;
+    height: number;
     readonly webview: Webview;
     readonly onDidDispose: Event<void>;
     dispose(): void;
@@ -68,6 +84,7 @@ class InlineCommentsForRepo implements vscode.Disposable {
   private currentCommentsPerFile: Map<string, Array<DiffComment>> = new Map();
   private currentDecorations: Array<vscode.Disposable> = [];
   constructor(
+    private extensionContext: vscode.ExtensionContext,
     private repo: VSCodeRepo,
     private provider: CodeReviewProvider,
     private ctx: RepositoryContext,
@@ -91,7 +108,7 @@ class InlineCommentsForRepo implements vscode.Disposable {
     );
 
     this.disposables.push(
-      vscode.window.onDidChangeActiveTextEditor(() => {
+      vscode.window.onDidChangeActiveTextEditor(editor => {
         this.updateActiveFileDecorations();
       }),
     );
@@ -111,6 +128,8 @@ class InlineCommentsForRepo implements vscode.Disposable {
     if (numComments > 0) {
       this.provider.fetchComments?.(diffId).then(comments => {
         this.ctx.logger.info(`Updating ${comments.length} diff comments for diff ${diffId}`);
+
+        this.currentCommentsPerFile.clear();
         for (const comment of comments) {
           if (comment.filename) {
             const existing = this.currentCommentsPerFile.get(comment.filename) ?? [];
@@ -131,6 +150,7 @@ class InlineCommentsForRepo implements vscode.Disposable {
     this.currentDecorations.forEach(d => d.dispose());
     this.currentDecorations = [];
   }
+
   private updateActiveFileDecorations() {
     this.disposeActiveFileDecorations();
     const editor = vscode.window.activeTextEditor;
@@ -156,18 +176,57 @@ class InlineCommentsForRepo implements vscode.Disposable {
       }
       const range = new vscode.Range(comment.line, 0, comment.line, 0);
 
-      const HEIGHT_IN_LINES = 1;
+      // TODO: figure out how to use navigator.userAgent to find out window or mac
+      // for some reason components/OperatingSystem.ts doesn't work
+      const initialEditorLineHeight = computeLineHeight(true);
+      const heightInLines =
+        comment.suggestedChange?.hunks.reduce((count, hunk) => count + hunk.lines.length, 0) ?? 0;
       const inset = vscode.window.createWebviewTextEditorInset(
         editor,
-        range.start.line - 1,
-        HEIGHT_IN_LINES,
+        range.start.line - 2 >= 0 ? range.start.line - 2 : 0,
+        heightInLines,
         {
           enableScripts: true,
         },
       );
 
-      inset.webview.html = `<html><body style="padding: 0;">${comment.html}</body></html>`;
+      inset.webview.options = getWebviewOptions(this.extensionContext, 'dist/webview');
+
+      inset.webview.html = htmlForWebview({
+        context: this.extensionContext,
+        devModeScripts: ['/extension/comments/webview/inlineCommentWebview.tsx'],
+        entryPointFile: 'inlineCommentWebview.js',
+        cssEntryPointFile: 'inlineCommentWebview.css',
+        extensionRelativeBase: 'dist/webview',
+        extraStyles: '',
+        initialScript: `
+          window.islCommentHtml = ${JSON.stringify(comment.html)};
+          window.initialEditorLineHeight = ${initialEditorLineHeight};
+        `,
+        rootClass: 'inline-comments',
+        title: 'Inline Comments',
+        webview: inset.webview,
+      });
       this.currentDecorations.push(inset);
+
+      inset.webview.onDidReceiveMessage((event: ClientToServerMessage) => {
+        switch (event.type) {
+          case 'setInsetHeight': {
+            if (event.height && event.height >= 0) {
+              inset.height = event.height;
+            }
+            break;
+          }
+          case 'fetchDiffComment': {
+            inset.webview.postMessage({
+              type: 'fetchedDiffComment',
+              hash: this.repo.repo.getHeadCommit()?.hash,
+              comment,
+            } as ServerToClientMessage);
+            break;
+          }
+        }
+      });
 
       const decoration = vscode.window.createTextEditorDecorationType({
         overviewRulerLane: vscode.OverviewRulerLane.Left,

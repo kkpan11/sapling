@@ -1,6 +1,6 @@
 load("@fbcode_macros//build_defs:rust_library.bzl", "rust_library")
 
-oncall("mononoke")
+oncall("scm_server_infra")
 
 rust_library(
     name = "mononoke_app",
@@ -61,5 +61,6 @@ rust_library(
         "//eden/mononoke/repo_attributes/commit_graph/commit_graph_types:commit_graph_types",
         "//eden/mononoke/repo_factory:repo_factory",
         "//eden/mononoke/server/context:context",
+        "//eden/scm/lib/clientinfo:clientinfo",
     ],
 )

@@ -632,7 +632,6 @@ def expushdiscoverybookmarks(pushop):
                 if (
                     known
                     or ctx.obsolete()
-                    or ctx.closesbranch()
                     # if there is a topic, let's just skip it for now
                     or (ctx.mutable() and "topic" in ctx.extra())
                 ):
@@ -1009,7 +1008,7 @@ def expushcmd(orig, ui, repo, dest=None, **opts):
 
     # big can o' copypasta from commands.push
     dest = ui.expandpath(dest or "default-push", dest or "default")
-    dest, branches = hg.parseurl(dest, opts.get("branch"))
+    dest = hg.parseurl(dest)
     try:
         other = hg.peer(repo, opts, dest)
     except error.RepoError:

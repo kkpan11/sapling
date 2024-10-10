@@ -1,7 +1,7 @@
 load("@fbcode_macros//build_defs:rust_binary.bzl", "rust_binary")
 load("@fbcode_macros//build_defs:rust_library.bzl", "rust_library")
 
-oncall("mononoke")
+oncall("scm_server_infra")
 
 rust_library(
     name = "async_requests",
@@ -12,6 +12,7 @@ rust_library(
         "//common/rust/shed/fbinit:fbinit",
         "//common/rust/shed/fbinit:fbinit-tokio",
         "//eden/mononoke/mononoke_macros:mononoke_macros",
+        "//eden/mononoke/repo_attributes/repo_identity:repo_identity",
         "//eden/mononoke/repo_factory:test_repo_factory",
     ],
     deps = [
@@ -22,10 +23,10 @@ rust_library(
         "fbsource//third-party/rust:thiserror",
         "fbsource//third-party/rust:tokio",
         ":requests_table",
+        "//common/rust/shed/stats:stats",
         "//eden/mononoke/async_requests/if:async_requests_types-thrift-rust",
         "//eden/mononoke/blobstore:blobstore",
         "//eden/mononoke/blobstore:memblob",
-        "//eden/mononoke/bookmarks:bookmarks",
         "//eden/mononoke/common/sql_construct:sql_construct",
         "//eden/mononoke/megarepo_api:megarepo_config",
         "//eden/mononoke/megarepo_api:megarepo_error",
@@ -84,7 +85,6 @@ rust_library(
         "fbsource//third-party/rust:async-trait",
         "//common/rust/shed/facet:facet",
         "//common/rust/shed/sql:sql",
-        "//eden/mononoke/bookmarks:bookmarks",
         "//eden/mononoke/common/rust/sql_ext:sql_ext",
         "//eden/mononoke/common/sql_construct:sql_construct",
         "//eden/mononoke/mononoke_types:mononoke_types",
@@ -101,7 +101,6 @@ rust_binary(
         ":requests_table",
         "//common/rust/shed/fbinit:fbinit-tokio",
         "//eden/mononoke/mononoke_macros:mononoke_macros",
-        "//eden/mononoke/repo_factory:test_repo_factory",
     ],
     deps = [
         "fbsource//third-party/rust:anyhow",
@@ -115,12 +114,12 @@ rust_binary(
         "//common/rust/shed/cloned:cloned",
         "//common/rust/shed/fbinit:fbinit",
         "//common/rust/shed/hostname:hostname",
+        "//common/rust/shed/stats:stats",
         "//eden/mononoke/async_requests/if:async_requests_types-thrift-rust",
         "//eden/mononoke/cmdlib:cmdlib_logging",
         "//eden/mononoke/cmdlib:environment",
         "//eden/mononoke/cmdlib/mononoke_app:mononoke_app",
         "//eden/mononoke/megarepo_api:megarepo_api",
-        "//eden/mononoke/megarepo_api:megarepo_config",
         "//eden/mononoke/megarepo_api:megarepo_error",
         "//eden/mononoke/metaconfig:metaconfig_types",
         "//eden/mononoke/mononoke_api:mononoke_api",

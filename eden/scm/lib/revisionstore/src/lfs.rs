@@ -42,6 +42,7 @@ use clientinfo_async::with_client_request_info_scope;
 use configmodel::convert::ByteCount;
 use configmodel::Config;
 use configmodel::ConfigExt;
+use format_util::strip_hg_file_metadata;
 use fs_err::File;
 use futures::future::FutureExt;
 use futures::stream::iter;
@@ -49,7 +50,6 @@ use futures::stream::FuturesUnordered;
 use futures::stream::StreamExt;
 use hg_http::http_client;
 use hg_http::http_config;
-use hgstore::strip_hg_file_metadata;
 use http::status::StatusCode;
 use http_client::Encoding;
 use http_client::HttpClient;
@@ -1735,6 +1735,76 @@ impl LfsClient {
         self.remote
             .batch_upload(objs, read_from_store, error_handler)
     }
+
+    pub fn upload(&self, keys: &[StoreKey]) -> Result<Vec<StoreKey>> {
+        let local_store = match self.local.as_ref() {
+            None => return Ok(keys.to_vec()),
+            Some(local) => local,
+        };
+
+        let mut not_found = Vec::new();
+
+        let objs = keys
+            .iter()
+            .map(|k| {
+                if let Some(pointer) = local_store.pointers.entry(k)? {
+                    match pointer.content_hashes.get(&ContentHashType::Sha256) {
+                        None => Ok(None),
+                        Some(content_hash) => Ok(Some((
+                            content_hash.clone().unwrap_sha256(),
+                            pointer.size.try_into()?,
+                        ))),
+                    }
+                } else {
+                    not_found.push(k.clone());
+                    Ok(None)
+                }
+            })
+            .filter_map(|res| res.transpose())
+            .collect::<Result<HashSet<_>>>()?;
+
+        if !objs.is_empty() {
+            let span = info_span!("LfsClient::upload", num_blobs = objs.len(), size = &0);
+            let _guard = span.enter();
+
+            let size = Arc::new(AtomicUsize::new(0));
+
+            self.batch_upload(
+                &objs,
+                {
+                    let local_store = local_store.clone();
+                    let size = size.clone();
+                    move |sha256, _size| {
+                        let key = StoreKey::from(ContentHash::Sha256(sha256));
+
+                        match local_store.blob(key)? {
+                            StoreResult::Found(blob) => {
+                                size.fetch_add(blob.len(), Ordering::Relaxed);
+                                Ok(Some(blob))
+                            }
+                            StoreResult::NotFound(_) => Ok(None),
+                        }
+                    }
+                },
+                |_, _| {},
+            )?;
+
+            span.record("size", size.load(Ordering::Relaxed));
+        }
+
+        if self.move_after_upload {
+            let span = info_span!("LfsClient::move_after_upload");
+            let _guard = span.enter();
+            // All the blobs were successfully uploaded, we can move the blobs from the local store
+            // to the shared store. This is safe to do as blobs will never be collected from the
+            // server once uploaded.
+            for obj in objs {
+                move_blob(&obj.0, obj.1 as u64, local_store, &self.shared)?;
+            }
+        }
+
+        Ok(not_found)
+    }
 }
 
 impl HgIdRemoteStore for LfsClient {
@@ -1877,73 +1947,7 @@ impl RemoteDataStore for LfsRemoteStore {
     }
 
     fn upload(&self, keys: &[StoreKey]) -> Result<Vec<StoreKey>> {
-        let local_store = match self.remote.local.as_ref() {
-            None => return Ok(keys.to_vec()),
-            Some(local) => local,
-        };
-
-        let mut not_found = Vec::new();
-
-        let objs = keys
-            .iter()
-            .map(|k| {
-                if let Some(pointer) = local_store.pointers.entry(k)? {
-                    match pointer.content_hashes.get(&ContentHashType::Sha256) {
-                        None => Ok(None),
-                        Some(content_hash) => Ok(Some((
-                            content_hash.clone().unwrap_sha256(),
-                            pointer.size.try_into()?,
-                        ))),
-                    }
-                } else {
-                    not_found.push(k.clone());
-                    Ok(None)
-                }
-            })
-            .filter_map(|res| res.transpose())
-            .collect::<Result<HashSet<_>>>()?;
-
-        if !objs.is_empty() {
-            let span = info_span!("LfsRemoteStore::upload", num_blobs = objs.len(), size = &0);
-            let _guard = span.enter();
-
-            let size = Arc::new(AtomicUsize::new(0));
-
-            self.remote.batch_upload(
-                &objs,
-                {
-                    let local_store = local_store.clone();
-                    let size = size.clone();
-                    move |sha256, _size| {
-                        let key = StoreKey::from(ContentHash::Sha256(sha256));
-
-                        match local_store.blob(key)? {
-                            StoreResult::Found(blob) => {
-                                size.fetch_add(blob.len(), Ordering::Relaxed);
-                                Ok(Some(blob))
-                            }
-                            StoreResult::NotFound(_) => Ok(None),
-                        }
-                    }
-                },
-                |_, _| {},
-            )?;
-
-            span.record("size", size.load(Ordering::Relaxed));
-        }
-
-        if self.remote.move_after_upload {
-            let span = info_span!("LfsRemoteStore::move_after_upload");
-            let _guard = span.enter();
-            // All the blobs were successfully uploaded, we can move the blobs from the local store
-            // to the shared store. This is safe to do as blobs will never be collected from the
-            // server once uploaded.
-            for obj in objs {
-                move_blob(&obj.0, obj.1 as u64, local_store, &self.remote.shared)?;
-            }
-        }
-
-        Ok(not_found)
+        self.remote.upload(keys)
     }
 }
 
@@ -2118,7 +2122,6 @@ mod tests {
     use crate::indexedlogdatastore::IndexedLogHgIdDataStore;
     use crate::indexedlogdatastore::IndexedLogHgIdDataStoreConfig;
     use crate::indexedlogutil::StoreType;
-    use crate::localstore::ExtStoredPolicy;
     use crate::testutil::example_blob;
     #[cfg(feature = "fb")]
     use crate::testutil::example_blob2;
@@ -2513,7 +2516,6 @@ mod tests {
         let indexedlog = Arc::new(IndexedLogHgIdDataStore::new(
             &config,
             &dir,
-            ExtStoredPolicy::Ignore,
             &indexedlog_config,
             StoreType::Rotated,
         )?);
@@ -2552,7 +2554,6 @@ mod tests {
         let indexedlog = Arc::new(IndexedLogHgIdDataStore::new(
             &config,
             &dir,
-            ExtStoredPolicy::Ignore,
             &indexedlog_config,
             StoreType::Rotated,
         )?);
@@ -2591,7 +2592,6 @@ mod tests {
         let indexedlog = Arc::new(IndexedLogHgIdDataStore::new(
             &config,
             &dir,
-            ExtStoredPolicy::Ignore,
             &indexedlog_config,
             StoreType::Rotated,
         )?);
@@ -2670,7 +2670,6 @@ mod tests {
         let indexedlog = Arc::new(IndexedLogHgIdDataStore::new(
             &config,
             &dir,
-            ExtStoredPolicy::Ignore,
             &indexedlog_config,
             StoreType::Rotated,
         )?);
@@ -2752,7 +2751,6 @@ mod tests {
         let indexedlog = Arc::new(IndexedLogHgIdDataStore::new(
             &config,
             &dir,
-            ExtStoredPolicy::Ignore,
             &indexedlog_config,
             StoreType::Rotated,
         )?);

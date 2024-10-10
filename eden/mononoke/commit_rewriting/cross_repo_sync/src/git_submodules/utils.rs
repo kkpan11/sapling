@@ -166,7 +166,7 @@ pub(crate) async fn submodule_diff(
     sm_repo: &impl Repo,
     cs_id: ChangesetId,
     parents: Vec<ChangesetId>,
-) -> Result<impl Stream<Item = Result<BonsaiDiffFileChange<(ContentId, u64)>>>> {
+) -> Result<impl Stream<Item = Result<BonsaiDiffFileChange<(FileType, ContentId, u64)>>>> {
     let fsnode_id = sm_repo
         .repo_derived_data()
         .derive::<RootFsnodeId>(ctx, cs_id)
@@ -198,7 +198,16 @@ pub(crate) async fn submodule_diff(
         sm_repo.repo_blobstore_arc().clone(),
         fsnode_id,
         parent_fsnode_ids,
-    ))
+    )
+    .map_ok(|change| {
+        change.map_leaf(|fsnode| {
+            (
+                fsnode.file_type().clone(),
+                fsnode.content_id().clone(),
+                fsnode.size(),
+            )
+        })
+    }))
 }
 
 /// Returns the content id of the given path if it is a submodule file.
@@ -545,23 +554,8 @@ pub async fn get_all_repo_submodule_deps<R>(
 where
     R: Repo,
 {
-    let source_repo_id = repo.repo_identity().id();
-
-    let source_repo_sync_configs = repo
-        .repo_cross_repo()
-        .live_commit_sync_config()
-        .get_all_commit_sync_config_versions(source_repo_id)
-        .await?;
-
-    let repo_deps_ids = source_repo_sync_configs
-        .into_values()
-        .filter_map(|mut cfg| {
-            cfg.small_repos
-                .remove(&source_repo_id)
-                .map(|small_repo_cfg| small_repo_cfg.submodule_config.submodule_dependencies)
-        })
-        .flatten()
-        .collect::<HashMap<_, _>>();
+    let repo_deps_ids: HashMap<NonRootMPath, RepositoryId> =
+        repo.repo_cross_repo().submodule_dep_ids().as_ref().clone();
 
     let submodule_deps_to_load = repo_deps_ids.len();
 

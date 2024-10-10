@@ -98,10 +98,6 @@ def _reproduciblecommits(ctx, extra) -> None:
     extra.pop("mutdate", None)
 
 
-def _savebranch(ctx, extra) -> None:
-    extra["branch"] = ctx.branch()
-
-
 def _makeextrafn(copiers):
     """make an extrafn out of the given copy-functions.
 
@@ -122,8 +118,6 @@ def _ctxdesc(ctx) -> str:
     repo = ctx.repo()
     names = []
     for nsname, ns in repo.names.items():
-        if nsname == "branches":
-            continue
         names.extend(ns.names(repo, ctx.node()))
     if names:
         desc += " (%s)" % " ".join(names)
@@ -486,11 +480,6 @@ class rebaseruntime:
             destancestors = self.repo.changelog.ancestors([destrev], inclusive=True)
             self.external = externalparent(self.repo, self.state, destancestors)
 
-        for destrev in sorted(set(destmap.values())):
-            dest = self.repo[destrev]
-            if dest.closesbranch():
-                self.ui.status(_("reopening closed branch head %s\n") % dest)
-
         self.prepared = True
         self._logrebasesize(destmap)
 
@@ -741,8 +730,6 @@ class rebaseruntime:
             else:
                 date = self.date
 
-            branch = repo[p1].branch()
-
             removed = manifestbuilder.removed()
             removedset = set(removed)
             modified = manifestbuilder.modified() + list(resolved)
@@ -776,7 +763,6 @@ class rebaseruntime:
                 date=date,
                 extra=extra,
                 user=ctx.user(),
-                branch=branch,
                 editor=editor,
                 loginfo=loginfo,
                 mutinfo=mutinfo,
@@ -1679,15 +1665,12 @@ def concludememorynode(
         if date is None:
             date = ctx.date()
 
-        branch = repo[p1].branch()
-
         memctx = wctx.tomemctx(
             commitmsg,
             parents=(repo[p1], repo[p2]),
             date=date,
             extra=extra,
             user=ctx.user(),
-            branch=branch,
             editor=editor,
             loginfo=loginfo,
             mutinfo=mutinfo,
@@ -1761,7 +1744,6 @@ def concludenode(
                 repo=reponame,
             )
 
-        repo.dirstate.setbranch(repo[newnode].branch())
         return newnode
 
 
@@ -2314,17 +2296,9 @@ def buildstate(repo, destmap, collapse):
         if commonbase == root:
             raise error.Abort(_("source is ancestor of destination"))
         if commonbase == dest:
-            wctx = repo[None]
-            if dest == wctx.p1():
-                # when rebasing to '.', it will use the current wd branch name
-                samebranch = root.branch() == wctx.branch()
-            else:
-                samebranch = root.branch() == dest.branch()
             rootparents = root.parents()
-            if (
-                not collapse
-                and samebranch
-                and (dest in rootparents or (dest.node() == nullid and not rootparents))
+            if not collapse and (
+                dest in rootparents or (dest.node() == nullid and not rootparents)
             ):
                 # mark the revision as done by setting its new revision
                 # equal to its old (current) revisions

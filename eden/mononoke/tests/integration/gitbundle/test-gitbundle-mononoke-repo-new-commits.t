@@ -6,7 +6,7 @@
 
   $ . "${TEST_FIXTURES}/library.sh"
   $ REPOTYPE="blob_files"
-  $ ENABLED_DERIVED_DATA='["skeleton_manifests", "git_commits", "git_trees", "git_delta_manifests_v2", "unodes", "filenodes", "hgchangesets"]' INFINITEPUSH_ALLOW_WRITES=true setup_common_config $REPOTYPE
+  $ INFINITEPUSH_ALLOW_WRITES=true setup_common_config $REPOTYPE
   $ GIT_REPO_ORIGIN="${TESTTMP}/origin/repo-git"
   $ GIT_REPO="${TESTTMP}/repo-git"
   $ HG_REPO="${TESTTMP}/repo"
@@ -16,10 +16,6 @@
   > amend=
   > infinitepush=
   > commitcloud=
-  > EOF
-  $ cat >> repos/repo/server.toml <<EOF
-  > [source_control_service]
-  > permit_writes = true
   > EOF
 
 # Enable infinite push and commit cloud for the test

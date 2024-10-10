@@ -18,11 +18,13 @@ use bookmarks_types::BookmarkKey;
 use bookmarks_types::BookmarkKind;
 use borrowed::borrowed;
 use bytes::Bytes;
+use case_conflict_skeleton_manifest::RootCaseConflictSkeletonManifestId;
 use context::CoreContext;
 use cross_repo_sync::CHANGE_XREPO_MAPPING_EXTRA;
 use futures::future;
 use futures::stream;
 use futures::stream::BoxStream;
+use futures::stream::FuturesUnordered;
 use futures::stream::StreamExt;
 use futures::stream::TryStreamExt;
 use futures_ext::FbStreamExt;
@@ -109,10 +111,6 @@ impl AffectedChangesets {
 
     pub(crate) fn bypass_checks_on_additional_changesets(&mut self) {
         self.should_bypass_checks_on_additional_changesets = true;
-    }
-
-    fn adding_new_changesets_to_repo(&self) -> bool {
-        !self.source_changesets.is_empty() || !self.new_changesets.is_empty()
     }
 
     /// Load bonsais in the additional changeset range that are not already in
@@ -268,7 +266,6 @@ impl AffectedChangesets {
             // Aggregate any error loading changesets on a per-chunk basis
             .map(|chunk| chunk.into_iter().collect::<Result<Vec<_>, _>>())
             .try_fold(HashSet::new(), |mut checked_changesets, chunk| {
-                let adding_new_changesets_to_repo = self.adding_new_changesets_to_repo();
                 async move {
                     if needs_extras_check {
                         Self::check_extras(&chunk).await?;
@@ -279,11 +276,9 @@ impl AffectedChangesets {
                     }
                     if needs_hooks_check {
                         Self::check_changeset_hooks(
-                            adding_new_changesets_to_repo,
                             &chunk,
                             ctx,
                             authz,
-                            repo,
                             hook_manager,
                             bookmark,
                             pushvars,
@@ -356,57 +351,126 @@ impl AffectedChangesets {
         repo: &impl Repo,
     ) -> Result<(), BookmarkMovementError> {
         stream::iter(loaded_changesets.iter().map(Ok))
-            .try_for_each_concurrent(100, |bcs| {
-                async move {
-                    let bcs_id = bcs.get_changeset_id();
-
-                    let sk_mf = repo
-                        .repo_derived_data()
-                        .derive::<RootSkeletonManifestId>(ctx, bcs_id)
-                        .await
-                        .map_err(Error::from)?
-                        .into_skeleton_manifest_id()
-                        .load(ctx, repo.repo_blobstore())
-                        .await
-                        .map_err(Error::from)?;
-                    if sk_mf.has_case_conflicts() {
-                        // We only reject a commit if it introduces new case
-                        // conflicts compared to its parents.
-                        let parents = stream::iter(bcs.parents().map(|parent_bcs_id| async move {
-                            repo.repo_derived_data()
-                                .derive::<RootSkeletonManifestId>(ctx, parent_bcs_id)
-                                .await
-                                .map_err(Error::from)?
-                                .into_skeleton_manifest_id()
-                                .load(ctx, repo.repo_blobstore())
-                                .await
-                                .map_err(Error::from)
-                        }))
-                        .buffered(10)
-                        .try_collect::<Vec<_>>()
-                        .await?;
-                        let config = &repo.repo_config().pushrebase.flags;
-
-                        if let Some((path1, path2)) = sk_mf
-                            .first_new_case_conflict(
-                                ctx,
-                                repo.repo_blobstore(),
-                                parents,
-                                &config.casefolding_check_excluded_paths,
-                            )
-                            .await?
-                        {
-                            return Err(BookmarkMovementError::CaseConflict {
-                                changeset_id: bcs_id,
-                                path1,
-                                path2,
-                            });
-                        }
-                    }
-                    Ok(())
+            .try_for_each_concurrent(100, |bcs| async move {
+                if justknobs::eval(
+                    "scm/mononoke:case_conflicts_check_use_ccsm",
+                    None,
+                    Some(repo.repo_identity().name()),
+                )? {
+                    Self::check_case_conflicts_using_ccsm(ctx, repo, bcs).await
+                } else {
+                    Self::check_case_conflicts_using_skeleton_manifest(ctx, repo, bcs).await
                 }
             })
             .await?;
+        Ok(())
+    }
+
+    async fn check_case_conflicts_using_skeleton_manifest(
+        ctx: &CoreContext,
+        repo: &impl Repo,
+        bcs: &BonsaiChangeset,
+    ) -> Result<(), BookmarkMovementError> {
+        let bcs_id = bcs.get_changeset_id();
+
+        let sk_mf = repo
+            .repo_derived_data()
+            .derive::<RootSkeletonManifestId>(ctx, bcs_id)
+            .await
+            .map_err(Error::from)?
+            .into_skeleton_manifest_id()
+            .load(ctx, repo.repo_blobstore())
+            .await
+            .map_err(Error::from)?;
+        if sk_mf.has_case_conflicts() {
+            // We only reject a commit if it introduces new case
+            // conflicts compared to its parents.
+            let parents = stream::iter(bcs.parents().map(|parent_bcs_id| async move {
+                repo.repo_derived_data()
+                    .derive::<RootSkeletonManifestId>(ctx, parent_bcs_id)
+                    .await
+                    .map_err(Error::from)?
+                    .into_skeleton_manifest_id()
+                    .load(ctx, repo.repo_blobstore())
+                    .await
+                    .map_err(Error::from)
+            }))
+            .buffered(10)
+            .try_collect::<Vec<_>>()
+            .await?;
+            let config = &repo.repo_config().pushrebase.flags;
+
+            if let Some((path1, path2)) = sk_mf
+                .first_new_case_conflict(
+                    ctx,
+                    repo.repo_blobstore(),
+                    parents,
+                    &config.casefolding_check_excluded_paths,
+                )
+                .await?
+            {
+                return Err(BookmarkMovementError::CaseConflict {
+                    changeset_id: bcs_id,
+                    path1,
+                    path2,
+                });
+            }
+        }
+        Ok(())
+    }
+
+    async fn check_case_conflicts_using_ccsm(
+        ctx: &CoreContext,
+        repo: &impl Repo,
+        bcs: &BonsaiChangeset,
+    ) -> Result<(), BookmarkMovementError> {
+        let bcs_id = bcs.get_changeset_id();
+
+        let ccsm = repo
+            .repo_derived_data()
+            .derive::<RootCaseConflictSkeletonManifestId>(ctx, bcs_id)
+            .await
+            .map_err(Error::from)?
+            .into_inner_id()
+            .load(ctx, repo.repo_blobstore())
+            .await
+            .map_err(Error::from)?;
+        if ccsm.rollup_counts().odd_depth_conflicts > 0 {
+            // We only reject a commit if it introduces new case
+            // conflicts compared to its parents.
+            let parents = bcs
+                .parents()
+                .map(|parent_bcs_id| async move {
+                    repo.repo_derived_data()
+                        .derive::<RootCaseConflictSkeletonManifestId>(ctx, parent_bcs_id)
+                        .await
+                        .map_err(Error::from)?
+                        .into_inner_id()
+                        .load(ctx, repo.repo_blobstore())
+                        .await
+                        .map_err(Error::from)
+                })
+                .collect::<FuturesUnordered<_>>()
+                .try_collect::<Vec<_>>()
+                .await?;
+            let config = &repo.repo_config().pushrebase.flags;
+
+            if let Some((path1, path2)) = ccsm
+                .find_new_case_conflict(
+                    ctx,
+                    repo.repo_blobstore(),
+                    parents,
+                    &config.casefolding_check_excluded_paths,
+                )
+                .await?
+            {
+                return Err(BookmarkMovementError::CaseConflict {
+                    changeset_id: bcs_id,
+                    path1,
+                    path2,
+                });
+            }
+        }
         Ok(())
     }
 
@@ -470,41 +534,14 @@ impl AffectedChangesets {
     /// service-initiated pushrebase but hooks will run with taking this
     /// into account.
     async fn check_changeset_hooks(
-        adding_new_changesets_to_repo: bool,
         loaded_changesets: &[BonsaiChangeset],
         ctx: &CoreContext,
         authz: &AuthorizationContext,
-        repo: &impl Repo,
         hook_manager: &HookManager,
         bookmark: &BookmarkKey,
         pushvars: Option<&HashMap<String, Bytes>>,
         cross_repo_push_source: CrossRepoPushSource,
     ) -> Result<(), BookmarkMovementError> {
-        let skip_running_hooks_if_public: bool = repo
-            .repo_bookmark_attrs()
-            .select(bookmark)
-            .map(|attr| attr.params().allow_move_to_public_commits_without_hooks)
-            .any(|x| x);
-        if skip_running_hooks_if_public && !adding_new_changesets_to_repo {
-            // For some bookmarks we allow to skip running hooks if:
-            // 1) this is just a bookmark move i.e. no new commits are added or pushrebased to the repo
-            // 2) we are allowed to skip commits for a bookmark like that
-            // 3) if all commits that are affectd by this bookmark move are public (which means
-            //  we should have already ran hooks for these commits).
-
-            let cs_ids = loaded_changesets
-                .iter()
-                .map(|bcs| bcs.get_changeset_id())
-                .collect::<Vec<_>>();
-            let public = repo
-                .phases()
-                .get_public(ctx, cs_ids.clone(), false /* ephemeral_derive */)
-                .await?;
-            if public == cs_ids.into_iter().collect::<HashSet<_>>() {
-                return Ok(());
-            }
-        }
-
         if !loaded_changesets.is_empty() {
             let push_authored_by = if authz.is_service() {
                 PushAuthoredBy::Service

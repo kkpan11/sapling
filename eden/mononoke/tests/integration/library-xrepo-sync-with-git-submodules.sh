@@ -21,12 +21,13 @@ LATEST_CONFIG_VERSION_NAME="INITIAL_IMPORT_SYNC_CONFIG"
 # By default, the `git_submodules_action` will be `STRIP`, meaning that any
 # changes to git submodules will not be synced to the large repo.
 function default_small_repo_config {
+  local repo_folder=${SMALL_REPO_DIR-smallrepofolder1}
   jq . << EOF
   {
     "repoid": $SUBMODULE_REPO_ID,
     "default_action": "prepend_prefix",
-    "default_prefix": "smallrepofolder1",
-    "bookmark_prefix": "bookprefix1/",
+    "default_prefix": "$repo_folder",
+    "bookmark_prefix": "$repo_folder/",
     "mapping": {
       "special": "specialsmallrepofolder_after_change"
     },
@@ -39,6 +40,7 @@ EOF
 # By default, the `git_submodules_action` will be `STRIP`, meaning that any
 # changes to git submodules will not be synced to the large repo.
 function default_initial_import_config {
+  repo_folder=${SMALL_REPO_DIR-smallrepofolder1}
   SMALL_REPO_CFG=$(default_small_repo_config)
   jq . << EOF
   {
@@ -59,7 +61,7 @@ function default_initial_import_config {
           "large_repo_id": $LARGE_REPO_ID,
           "small_repos": {
             "$SUBMODULE_REPO_ID": {
-              "bookmark_prefix": "bookprefix1/",
+              "bookmark_prefix": "$repo_folder/",
               "common_pushrebase_bookmarks_map": { "master": "heads/master" }
             }
           }
@@ -106,11 +108,11 @@ function run_common_xrepo_sync_with_gitsubmodules_setup {
   export XDG_CONFIG_HOME=$TESTTMP
   git config --global protocol.file.allow always
 
-  INFINITEPUSH_ALLOW_WRITES=true ENABLE_API_WRITES=1 REPOID="$LARGE_REPO_ID" \
+  INFINITEPUSH_ALLOW_WRITES=true REPOID="$LARGE_REPO_ID" \
     REPONAME="$LARGE_REPO_NAME" setup_common_config "$REPOTYPE"
   # Enable writes in small repo as well, so we can update bookmarks when running gitimport,
   # and set the default commit identity schema to git.
-  INFINITEPUSH_ALLOW_WRITES=true ENABLE_API_WRITES=1 REPOID="$SUBMODULE_REPO_ID" \
+  INFINITEPUSH_ALLOW_WRITES=true REPOID="$SUBMODULE_REPO_ID" \
     REPONAME="$SUBMODULE_REPO_NAME" COMMIT_IDENTITY_SCHEME=3 setup_common_config "$REPOTYPE"
 
   # Set the REPONAME environment variable to the large repo name, so that all

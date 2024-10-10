@@ -55,14 +55,6 @@
 //! Compose multiple stores into one and re-implement the main traits by
 //! iterating over these stores.
 //!
-//! ## `MultiplexDeltaStore`, `MultiplexHgIdHistoryStore`
-//!
-//! Similarly to the `UnionStore`, this allows composing stores together but
-//! for the purposes of duplicating all the writes to all the stores. Mainly
-//! used to send data to both a fast caching server (ex: Memcache), and to a
-//! shared store when receiving network data. It can also be used for data format
-//! migration
-//!
 //! ## `IndexedLogHgIdDataStore`, `IndexedLogHgIdHistoryStore`
 //!
 //! Basic `IndexedLog` backed stores. As opposed to the packfiles, these allow
@@ -130,7 +122,6 @@ pub mod indexedlogauxstore;
 pub mod indexedlogdatastore;
 pub mod indexedlogtreeauxstore;
 pub mod localstore;
-pub mod multiplexstore;
 pub mod scmstore;
 pub mod trait_impls;
 pub mod uniondatastore;
@@ -145,7 +136,6 @@ pub use crate::datastore::ContentMetadata;
 pub use crate::datastore::Delta;
 pub use crate::datastore::HgIdDataStore;
 pub use crate::datastore::HgIdMutableDeltaStore;
-pub use crate::datastore::LegacyStore;
 pub use crate::datastore::RemoteDataStore;
 pub use crate::datastore::StoreResult;
 pub use crate::edenapi::SaplingRemoteApiFileStore;
@@ -153,6 +143,7 @@ pub use crate::edenapi::SaplingRemoteApiRemoteStore;
 pub use crate::edenapi::SaplingRemoteApiTreeStore;
 pub use crate::historystore::HgIdHistoryStore;
 pub use crate::historystore::HgIdMutableHistoryStore;
+pub use crate::historystore::HistoryStore;
 pub use crate::historystore::RemoteHistoryStore;
 pub use crate::indexedlogauxstore::AuxStore;
 pub use crate::indexedlogdatastore::IndexedLogHgIdDataStore;
@@ -160,12 +151,9 @@ pub use crate::indexedlogdatastore::IndexedLogHgIdDataStoreConfig;
 pub use crate::indexedloghistorystore::IndexedLogHgIdHistoryStore;
 pub use crate::indexedlogutil::StoreType;
 pub use crate::lfs::LfsRemote;
-pub use crate::localstore::ExtStoredPolicy;
 pub use crate::localstore::LocalStore;
 pub use crate::metadatastore::MetadataStore;
 pub use crate::metadatastore::MetadataStoreBuilder;
-pub use crate::multiplexstore::MultiplexDeltaStore;
-pub use crate::multiplexstore::MultiplexHgIdHistoryStore;
 pub use crate::redacted::redact_if_needed;
 pub use crate::remotestore::HgIdRemoteStore;
 pub use crate::repair::repair;

@@ -18,6 +18,7 @@ use async_trait::async_trait;
 use cache_warmup::cache_warmup;
 use cache_warmup::CacheWarmupKind;
 use clap::Parser;
+use clientinfo::ClientEntryPoint;
 use cloned::cloned;
 use cmdlib_logging::ScribeLoggingArgs;
 use environment::BookmarkCacheDerivedData;
@@ -235,9 +236,10 @@ impl RepoShardedProcessExecutor for MononokeServerProcessExecutor {
 fn main(fb: FacebookInit) -> Result<()> {
     let app = MononokeAppBuilder::new(fb)
         .with_default_scuba_dataset("mononoke_test_perf")
+        .with_entry_point(ClientEntryPoint::SaplingRemoteApi)
         .with_bookmarks_cache(BookmarkCacheOptions {
             cache_kind: BookmarkCacheKind::Local,
-            derived_data: BookmarkCacheDerivedData::HgOnly,
+            derived_data: BookmarkCacheDerivedData::HgAndGit,
         })
         .with_app_extension(WarmBookmarksCacheExtension {})
         .with_app_extension(McrouterAppExtension {})
@@ -346,7 +348,7 @@ fn main(fb: FacebookInit) -> Result<()> {
                 // Repo cache warmup can be quite expensive, let's limit to 40
                 // at a time.
                 .buffer_unordered(40)
-                .try_collect()
+                .try_collect::<()>()
                 .await?;
             info!(&root_log, "Cache warmup completed");
             if let Some(mut executor) = args.sharded_executor_args.build_executor(

@@ -10,8 +10,8 @@ from __future__ import absolute_import
 import re
 
 from sapling import commands, error, extensions, registrar
-from sapling.commands.subtree import SUBTREE_BRANCH_INFO_KEY
 from sapling.i18n import _
+from sapling.utils.subtreeutil import SUBTREE_BRANCH_KEY
 
 
 cmdtable = {}
@@ -33,7 +33,7 @@ usedinternally = {
     "mutdate",
     "mutop",
     "mutsplit",
-    SUBTREE_BRANCH_INFO_KEY,
+    SUBTREE_BRANCH_KEY,
 }
 
 

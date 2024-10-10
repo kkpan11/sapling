@@ -6,7 +6,7 @@ load(
     "dott_test",
 )
 
-oncall("mononoke")
+oncall("scm_server_infra")
 
 python_library(
     name = "lib_buck",
@@ -61,7 +61,7 @@ dott_test(
         "//eden/mononoke/facebook/derived_data_service:derivation_worker",
         "//eden/mononoke/facebook/derived_data_service:derived_data_service",
         "//eden/mononoke/scs/client:scsc",
-        "//eden/mononoke/scs_server:scs_server",
+        "//eden/mononoke/scs/scs_server:scs_server",
         "//eden/mononoke/tools/admin:newadmin",
         "//eden/mononoke/tools/facebook/backfill_bonsai_blob_mapping:backfill_bonsai_blob_mapping",
         "//eden/mononoke/tools/testtool:testtool",
@@ -118,7 +118,7 @@ dott_test(
         "//eden/mononoke/git/gitimport:gitimport",
         "//eden/mononoke/lfs_server:lfs_server",
         "//eden/mononoke/scs/client:scsc",
-        "//eden/mononoke/scs_server:scs_server",
+        "//eden/mononoke/scs/scs_server:scs_server",
         "//eden/mononoke/tools/admin:newadmin",
     ],
 )
@@ -253,6 +253,7 @@ dott_test(
             "test-scs-land-service*.t",
         ],
     ),
+    enable_async_requests_worker = True,
     deps = [
         "//eden/mononoke:admin",
         "//eden/mononoke:backfill_mapping",
@@ -261,7 +262,7 @@ dott_test(
         "//eden/mononoke/commit_rewriting/backsyncer:backsyncer_cmd",
         "//eden/mononoke/mononoke_hg_sync_job:mononoke_hg_sync_job",
         "//eden/mononoke/scs/client:scsc",
-        "//eden/mononoke/scs_server:scs_server",
+        "//eden/mononoke/scs/scs_server:scs_server",
         "//eden/mononoke/tools/admin:newadmin",
         "//eden/mononoke/tools/testtool:testtool",
     ],
@@ -275,7 +276,7 @@ dott_test(
         "//eden/mononoke:mononoke",
         "//eden/mononoke/git/gitimport:gitimport",
         "//eden/mononoke/scs/client:scsc",
-        "//eden/mononoke/scs_server:scs_server",
+        "//eden/mononoke/scs/scs_server:scs_server",
         "//eden/mononoke/tools/admin:newadmin",
         "//eden/mononoke/tools/testtool:testtool",
     ],
@@ -291,7 +292,7 @@ dott_test(
         "//eden/mononoke/commit_rewriting/backsyncer:backsyncer_cmd",
         "//eden/mononoke/land_service/facebook/server:land_service",
         "//eden/mononoke/scs/client:scsc",
-        "//eden/mononoke/scs_server:scs_server",
+        "//eden/mononoke/scs/scs_server:scs_server",
         "//eden/mononoke/tools/admin:newadmin",
         "//eden/mononoke/tools/testtool:testtool",
     ],
@@ -323,7 +324,7 @@ dott_test(
         "//eden/mononoke:blobimport",
         "//eden/mononoke:mononoke",
         "//eden/mononoke/scs/client:scsc",
-        "//eden/mononoke/scs_server:scs_server",
+        "//eden/mononoke/scs/scs_server:scs_server",
         "//eden/mononoke/tools/admin:newadmin",
         "//eden/mononoke/tools/testtool:testtool",
     ],
@@ -358,7 +359,7 @@ dott_test(
         "//eden/mononoke/git/gitimport:gitimport",
         "//eden/mononoke/lfs_server:lfs_server",
         "//eden/mononoke/scs/client:scsc",
-        "//eden/mononoke/scs_server:scs_server",
+        "//eden/mononoke/scs/scs_server:scs_server",
         "//eden/mononoke/tools/admin:newadmin",
     ],
 )
@@ -381,7 +382,7 @@ dott_test(
         "//eden/mononoke/git_server:git_server",
         "//eden/mononoke/mononoke_hg_sync_job:mononoke_hg_sync_job",
         "//eden/mononoke/scs/client:scsc",
-        "//eden/mononoke/scs_server:scs_server",
+        "//eden/mononoke/scs/scs_server:scs_server",
         "//eden/mononoke/tools/admin:newadmin",
         "//eden/mononoke/tools/testtool:testtool",
     ],

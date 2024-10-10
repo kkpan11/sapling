@@ -1,12 +1,10 @@
 #modern-config-incompatible
-#inprocess-hg-incompatible
 
 #require no-eden
 
 
 Pushrebase still needs filepeer.
 
-  $ setconfig experimental.allowfilepeer=True
 
   $ configure modern
   $ enable pushrebase

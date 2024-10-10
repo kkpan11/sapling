@@ -2,7 +2,7 @@ load("//eden/mononoke/facebook/fbpkg:lib.bzl", "mononoke_fbpkg")
 load("//tupperware/cm/antlir2/bzl:buck2_container.bzl", "tw")
 load("//tupperware/config/common:tw.mixin.zkdaemon.bzl", zkdaemon_mixin = "mixin")
 
-oncall("mononoke")
+oncall("scm_server_infra")
 
 mononoke_fbpkg(
     name = "mononoke.server",
@@ -19,7 +19,7 @@ mononoke_fbpkg(
         "oncalls": "fbcode//oncall/py:oncalls",
         "scmadmin": "fbcode//scm/scmadmin:client",
         # actual scs server binary
-        "scs_server": "fbcode//eden/mononoke/scs_server:scs_server",
+        "scs_server": "fbcode//eden/mononoke/scs/scs_server:scs_server",
     },
 )
 
@@ -179,6 +179,19 @@ mononoke_fbpkg(
     path_actions = {
         "fbsource_commit_tailer.par": "//eden/mononoke/facebook/fbsource_commit_tailer:fbsource_commit_tailer",
         "swift": "//scribeutil/swift:swift",
+    },
+)
+
+mononoke_fbpkg(
+    name = "mononoke.whatsapp_commit_tailer",
+    compress_type = None,
+    override_log_paths = [
+        "eden/mononoke/facebook/post_commit_tailer",
+        "eden/mononoke/facebook/whatsapp_commit_tailer",
+    ],
+    path_actions = {
+        "swift": "//scribeutil/swift:swift",
+        "whatsapp_commit_tailer.par": "//eden/mononoke/facebook/whatsapp_commit_tailer:whatsapp_commit_tailer",
     },
 )
 

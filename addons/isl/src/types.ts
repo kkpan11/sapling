@@ -87,8 +87,10 @@ export type DiffCommentReaction = {
 
 export type DiffComment = {
   author: string;
+  authorName?: string;
   authorAvatarUri?: string;
   html: string;
+  content?: string;
   created: Date;
   /** If it's an inline comment, this is the file path with the comment */
   filename?: string;
@@ -97,7 +99,10 @@ export type DiffComment = {
   reactions: Array<DiffCommentReaction>;
   /** Suggestion for how to change the code, as a patch */
   suggestedChange?: ParsedDiff;
+  codePatchSuggestedChange?: ParsedDiff;
   replies: Array<DiffComment>;
+  /** If this comment has been resolved. true => "resolved", false => "unresolved", null => the comment is not resolvable, don't show any UI for it */
+  isResolved?: boolean;
 };
 
 /**
@@ -204,7 +209,7 @@ export type CodeReviewSystem =
       path?: string;
     };
 
-export type PreferredSubmitCommand = 'pr' | 'ghstack';
+export type PreferredSubmitCommand = 'pr' | 'ghstack' | 'push';
 
 export type StableCommitMetadata = {
   value: string;
@@ -282,8 +287,10 @@ export type CommitInfo = {
    * This is only valid after the operation which creates this commit has completed.
    */
   optimisticRevset?: Revset;
-  /** only a subset of the total files for this commit */
-  filesSample: ReadonlyArray<ChangedFile>;
+  /** only a subset of the total changed file paths for this commit.
+   * File statuses must be fetched separately for performance.
+   */
+  filePathsSample: ReadonlyArray<RepoRelativePath>;
   totalFileCount: number;
   /** @see {@link DiffId} */
   diffId?: DiffId;
@@ -553,6 +560,18 @@ export type OperationProgressEvent = {type: 'operationProgress'} & OperationProg
 /** A line number starting from 1 */
 export type OneIndexedLineNumber = Exclude<number, 0>;
 
+export type DiagnosticSeverity = 'error' | 'warning' | 'info' | 'hint';
+
+export type Diagnostic = {
+  range: {startLine: number; startCol: number; endLine: number; endCol: number};
+  message: string;
+  severity: DiagnosticSeverity;
+  /** LSP providing this diagnostic, like "typescript" or "eslint" */
+  source?: string;
+  /** Code or name for this kind of diagnostic */
+  code?: string;
+};
+
 /* protocol */
 
 /**
@@ -563,7 +582,7 @@ export type PlatformSpecificClientToServerMessages =
   | {type: 'platform/openFile'; path: RepoRelativePath; options?: {line?: OneIndexedLineNumber}}
   | {
       type: 'platform/openFiles';
-      paths: Array<RepoRelativePath>;
+      paths: ReadonlyArray<RepoRelativePath>;
       options?: {line?: OneIndexedLineNumber};
     }
   | {type: 'platform/openContainingFolder'; path: RepoRelativePath}
@@ -581,6 +600,7 @@ export type PlatformSpecificClientToServerMessages =
       value: Json | undefined;
       scope: 'workspace' | 'global';
     }
+  | {type: 'platform/checkForDiagnostics'; paths: Array<RepoRelativePath>}
   | {type: 'platform/executeVSCodeCommand'; command: string; args: Array<Json>}
   | {type: 'platform/subscribeToVSCodeConfig'; config: string};
 
@@ -599,6 +619,10 @@ export type PlatformSpecificServerToClientMessages =
     }
   | {type: 'platform/unsavedFiles'; unsaved: Array<{path: RepoRelativePath; uri: string}>}
   | {type: 'platform/savedAllUnsavedFiles'; success: boolean}
+  | {
+      type: 'platform/gotDiagnostics';
+      diagnostics: Map<RepoRelativePath, Array<Diagnostic>>;
+    }
   | {
       type: 'platform/vscodeConfigChanged';
       config: string;
@@ -702,6 +726,8 @@ export type LocalStorageName =
   | 'isl.expand-generated-files'
   | 'isl-color-theme'
   | 'isl.auto-resolve-before-continue'
+  | 'isl.warn-about-diagnostics'
+  | 'isl.hide-non-blocking-diagnostics'
   // These keys are prefixes, with further dynamic keys appended afterwards
   | 'isl.edited-commit-messages:';
 
@@ -764,10 +790,11 @@ export type ClientToServerMessage =
   | {type: 'fetchFeatureFlag'; name: string}
   | {type: 'fetchInternalUserInfo'}
   | {
-      type: 'generateAICommitMessage';
+      type: 'generateSuggestionWithAI';
       id: string;
-      title: string;
       comparison: Comparison;
+      fieldName: string;
+      title: string;
     }
   | {type: 'gotUiState'; state: string}
   | CodeReviewProviderSpecificClientToServerMessages
@@ -856,7 +883,7 @@ export type ServerToClientMessage =
   | {type: 'fetchedFeatureFlag'; name: string; passes: boolean}
   | {type: 'fetchedInternalUserInfo'; info: Serializable}
   | {
-      type: 'generatedAICommitMessage';
+      type: 'generatedSuggestionWithAI';
       message: Result<string>;
       id: string;
     }

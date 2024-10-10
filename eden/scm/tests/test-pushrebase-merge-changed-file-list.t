@@ -1,9 +1,7 @@
 #modern-config-incompatible
-#inprocess-hg-incompatible
 
 #require no-eden
 
-  $ setconfig experimental.allowfilepeer=True
 
   $ . $RUNTESTDIR/library.sh
 

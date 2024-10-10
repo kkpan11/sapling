@@ -74,6 +74,12 @@ export interface UICodeReviewProvider {
   /** Whether this review provider allows attaching a short update message when resubmitting a diff. */
   supportsUpdateMessage: boolean;
 
+  /** This provider supports "branch" Diff creation, where an entire stack is one unit of code review. */
+  supportBranchingPrs: boolean;
+
+  /** Get the code review provider's branch corresponding to a remote bookmark */
+  branchNameForRemoteBookmark?: (remoteBookmark: string) => string;
+
   getSupportedStackActions(
     hash: Hash,
     dag: Dag,

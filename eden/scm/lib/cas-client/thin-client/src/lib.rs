@@ -9,6 +9,8 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use cas_client::CasClient;
+use configmodel::convert::ByteCount;
+use configmodel::convert::FromConfigValue;
 use configmodel::Config;
 use configmodel::ConfigExt;
 use re_client_lib::create_default_config;
@@ -25,6 +27,7 @@ pub struct ThinCasClient {
     uds_path: Option<String>,
     verbose: bool,
     log_dir: Option<String>,
+    fetch_limit: ByteCount,
 }
 
 pub fn init() {
@@ -63,8 +66,12 @@ impl ThinCasClient {
                         log_dir = Some(std::env::temp_dir().to_string_lossy().to_string());
                     }
                 }
+            } else {
+                log_dir = Some(std::env::temp_dir().to_string_lossy().to_string());
             }
         }
+
+        let default_fetch_limit = ByteCount::try_from_str("200MB")?;
 
         Ok(Self {
             client: Default::default(),
@@ -77,6 +84,8 @@ impl ThinCasClient {
                 ..Default::default()
             },
             log_dir,
+            fetch_limit: config
+                .get_or::<ByteCount>("cas", "max-batch-bytes", || default_fetch_limit)?,
         })
     }
 
@@ -89,6 +98,7 @@ impl ThinCasClient {
         re_config.features_config_path = "remote_execution/features/client_sapling".to_string();
         re_config.enable_ods_logging = false;
         re_config.enable_scuba_logging = false;
+        re_config.enable_cancellation = true;
 
         let mut builder = REClientBuilder::new(fbinit::expect_init()).with_config(re_config);
 

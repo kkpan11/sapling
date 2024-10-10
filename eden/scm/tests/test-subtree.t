@@ -33,15 +33,16 @@ test subtree copy
   $ hg subtree cp -r $A --from-path foo --to-path bar -m "subtree copy foo -> bar"
   1 files updated, 0 files merged, 0 files removed, 0 files unresolved
   $ hg log -G -T '{node|short} {desc|firstline}\n'
-  @  04b520c8a658 subtree copy foo -> bar
+  @  ecc461c7d308 subtree copy foo -> bar
   │
   o  b9450a0e6ae4 B
   │
   o  d908813f0f7c A
   $ hg show --git
-  commit:      04b520c8a658
+  commit:      ecc461c7d308
   user:        test
   date:        Thu Jan 01 00:00:00 1970 +0000
+  files:       bar/x
   description:
   subtree copy foo -> bar
   
@@ -56,7 +57,7 @@ test subtree copy
   @@ -0,0 +1,1 @@
   +aaa
   $ hg dbsh -c 'print(repo["."].extra())'
-  {'branch': 'default', 'test_branch_info': '{"v":1,"branches":[{"from_path":"foo","to_path":"bar","from_commit":"d908813f0f7c9078810e26aad1e37bdb32013d4b"}]}'}
+  {'branch': 'default', 'test_subtree_copy': '{"v":1,"branches":[{"from_path":"foo","to_path":"bar","from_commit":"d908813f0f7c9078810e26aad1e37bdb32013d4b"}]}'}
 
 
 abort when the working copy is dirty
@@ -103,9 +104,9 @@ test subtree graft
   $ hg subtree graft -r $C --from-path foo --to-path bar
   grafting 78072751cf70 "C"
   $ hg log -G -T '{node|short} {desc|firstline}\n'
-  @  0eda80132ca9 C
+  @  8b7f0cb610d9 Graft "C"
   │
-  o  e201af41baa5 subtree copy foo -> bar
+  o  c8ddf4d613b1 subtree copy foo -> bar
   │
   o  78072751cf70 C
   │
@@ -113,12 +114,12 @@ test subtree graft
   │
   o  2f10237b4399 A
   $ hg show
-  commit:      0eda80132ca9
+  commit:      8b7f0cb610d9
   user:        test
   date:        Thu Jan 01 00:00:00 1970 +0000
   files:       bar/x
   description:
-  C
+  Graft "C"
   
   Grafted from 78072751cf70f1ca47671c625f3b2d7f86f45f00
   - Grafted path foo to bar
@@ -133,6 +134,42 @@ test subtree graft
   -3
   +3a
 
+test 'subtree graft -m'
+  $ newclientrepo
+  $ drawdag <<'EOS'
+  > C   # C/foo/x = 1a\n2\n3a\n
+  > |
+  > B   # B/foo/x = 1a\n2\n3\n
+  > |
+  > A   # A/foo/x = 1\n2\n3\n
+  >     # drawdag.defaultfiles=false
+  > EOS
+  $ hg go $C -q
+  $ hg subtree copy -r $B --from-path foo --to-path bar -m 'subtree copy foo -> bar'
+  1 files updated, 0 files merged, 0 files removed, 0 files unresolved
+
+  $ hg subtree graft -r $C --from-path foo --to-path bar -m "new C"
+  grafting 78072751cf70 "C"
+  $ hg show
+  commit:      faa9028b5ad6
+  user:        test
+  date:        Thu Jan 01 00:00:00 1970 +0000
+  files:       bar/x
+  description:
+  new C
+  
+  Grafted from 78072751cf70f1ca47671c625f3b2d7f86f45f00
+  - Grafted path foo to bar
+  
+  
+  diff --git a/bar/x b/bar/x
+  --- a/bar/x
+  +++ b/bar/x
+  @@ -1,3 +1,3 @@
+   1a
+   2
+  -3
+  +3a
 
 test subtree merge
   $ newclientrepo
@@ -165,13 +202,18 @@ test subtree merge
   +3a
   +4
   $ hg ci -m 'subtree merge foo to bar'
+  $ hg dbsh -c 'print(repo["."].extra())'
+  {'branch': 'default', 'test_subtree_merge': '{"v":1,"merges":[{"from_commit":"907442010f516d83aea80b4382964be22a34214f","from_path":"foo","to_path":"bar"}]}'}
   $ hg show
-  commit:      590261cf98e2
+  commit:      d4af047a2267
   user:        test
   date:        Thu Jan 01 00:00:00 1970 +0000
   files:       bar/x
   description:
   subtree merge foo to bar
+  
+  Subtree merge from 907442010f516d83aea80b4382964be22a34214f
+  - Merged path foo to bar
   
   
   diff --git a/bar/x b/bar/x
@@ -183,6 +225,15 @@ test subtree merge
   -3
   +3a
   +4
+should have one parent
+  $ hg log -r . -T '{parents}'
+  573882c72521  (no-eol)
+tofix: show logs of 'bar' directory
+  $ hg log bar
+  commit:      d4af047a2267
+  user:        test
+  date:        Thu Jan 01 00:00:00 1970 +0000
+  summary:     subtree merge foo to bar
 
 test subtree merge with normal copy
   $ newclientrepo
@@ -201,6 +252,11 @@ test subtree merge with normal copy
   (subtree merge, don't forget to commit)
   $ hg st
   M bar/x
+  $ hg debugmergestate | grep -B 1 -A 2 "subtree merges"
+  other: df87606c27154ec2ea14aac8fd294e2a611a2a82
+  subtree merges:
+    from_commit: df87606c27154ec2ea14aac8fd294e2a611a2a82, from: foo, to: bar
+  labels:
   $ hg diff
   diff --git a/bar/x b/bar/x
   --- a/bar/x

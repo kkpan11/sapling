@@ -17,6 +17,7 @@ use std::time::UNIX_EPOCH;
 use acl_regions::AclRegions;
 use anyhow::anyhow;
 use anyhow::Error;
+use anyhow::Result;
 use blobrepo_hg::BlobRepoHg;
 use blobstore::Loadable;
 use bonsai_git_mapping::BonsaiGitMapping;
@@ -336,20 +337,20 @@ async fn maybe_push_redirector<'a, R: MononokeRepo>(
         .push_redirector_enabled_for_public(ctx, repo.repo_identity().id())
         .await?;
 
-    let repo_provider: RepoProvider<'a, R> = Arc::new(move |repo_id| {
-        Box::pin({
-            async move {
-                let repo = repos
-                    .get_by_id(repo_id.id())
-                    .ok_or_else(|| anyhow!("Submodule dependency repo with id {repo_id} not available through RepoContext"))?;
-                Ok(repo)
-            }
-        })
-    });
-
-    let submodule_deps = get_all_repo_submodule_deps(ctx, repo.clone(), repo_provider).await?;
-
     if enabled {
+        let repo_provider: RepoProvider<'a, R> = Arc::new(move |repo_id| {
+            Box::pin({
+                async move {
+                    let repo = repos
+                        .get_by_id(repo_id.id())
+                        .ok_or_else(|| anyhow!("Submodule dependency repo with id {repo_id} not available through RepoContext"))?;
+                    Ok(repo)
+                }
+            })
+        });
+
+        let submodule_deps = get_all_repo_submodule_deps(ctx, repo.clone(), repo_provider).await?;
+
         let large_repo_id = base.common_commit_sync_config.large_repo_id;
         let large_repo = repos.get_by_id(large_repo_id.id()).ok_or_else(|| {
             MononokeError::InvalidRequest(format!("Large repo '{}' not found", large_repo_id))
@@ -795,6 +796,13 @@ impl<R: MononokeRepo> RepoContext<R> {
             .map(AsRef::as_ref)
     }
 
+    pub fn push_redirector(&self) -> Option<&PushRedirector<R>> {
+        match &self.push_redirector {
+            Some(prd) => Some(prd.as_ref()),
+            None => None,
+        }
+    }
+
     /// The configuration for the referenced repository.
     pub fn config(&self) -> &RepoConfig {
         self.repo.repo_config()
@@ -1180,8 +1188,12 @@ impl<R: MononokeRepo> RepoContext<R> {
         let maybe_warm_changeset =
             maybe_warm_cs_id.map(|cs_id| ChangesetContext::new(self.clone(), cs_id));
 
-        let (_id, maybe_fresh_cs_id, _reason, timestamp) = maybe_log_entry
-            .ok_or_else(|| anyhow!("Bookmark update log has no entries for queried bookmark!"))?;
+        let (maybe_fresh_cs_id, timestamp) = match maybe_log_entry {
+            Some((_id, maybe_fresh_cs_id, _reason, timestamp)) => (maybe_fresh_cs_id, timestamp),
+            None => {
+                return Ok(None);
+            }
+        };
 
         let fresh_cs_id = match maybe_fresh_cs_id {
             Some(cs_id) => cs_id,

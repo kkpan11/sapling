@@ -46,14 +46,14 @@ pub async fn list_requests(
         "Request id",
         "Method",
         "Status",
-        "Target bookmark",
+        "Target",
         "Source name (sync_changeset)",
         "Source Changeset (sync_changeset)",
         "Created at",
         "Ready at",
         "Duration",
     ]);
-    let res = queue
+    let mut res = queue
         .list_requests(
             &ctx,
             Some(&Timestamp::from_timestamp_secs(
@@ -63,6 +63,8 @@ pub async fn list_requests(
         )
         .await
         .context("listing queued requests")?;
+    // sort by request id to stabilise output
+    res.sort_by_key(|(req_id, _, _)| req_id.0.0);
     for (req_id, entry, params) in res.into_iter() {
         let (source_name, changeset_id) = match params.thrift() {
             ThriftAsynchronousRequestParams::megarepo_sync_changeset_params(params) => (
@@ -82,16 +84,20 @@ pub async fn list_requests(
         } else {
             "Not finished".to_string()
         };
+        let target_str = match params.target() {
+            Ok(target) => target.to_string(),
+            Err(_) => "(failed to convert)".to_string(),
+        };
         table.add_row(row![
-            req_id.0,                                             // Request id
-            req_id.1,                                             // Method
-            entry.status,                                         // Status
-            params.target().context("decoding target")?.bookmark, // Bookmark
-            &source_name,                                         // Source name
-            &changeset_id,                                        // Source Changeset
-            &created_at,                                          // Created at
-            &ready_at_str,                                        // Ready at
-            duration,                                             // Duration
+            req_id.0,      // Request id
+            req_id.1,      // Method
+            entry.status,  // Status
+            target_str,    // Target
+            &source_name,  // Source name
+            &changeset_id, // Source Changeset
+            &created_at,   // Created at
+            &ready_at_str, // Ready at
+            duration,      // Duration
         ]);
     }
 

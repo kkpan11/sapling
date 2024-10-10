@@ -1,6 +1,5 @@
 #chg-compatible
 #debugruntest-incompatible
-  $ setconfig experimental.allowfilepeer=True
 
 
   $ . "$TESTDIR/library.sh"
@@ -24,7 +23,7 @@
   adding changesets
   adding manifests
   adding file changes
-  updating to branch default
+  updating to tip
   1 files fetched over 1 fetches - (1 misses, 0.00% hit ratio) over * (glob) (?)
   1 files updated, 0 files merged, 0 files removed, 0 files unresolved
 

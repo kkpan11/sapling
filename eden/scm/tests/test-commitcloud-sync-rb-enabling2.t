@@ -1,11 +1,4 @@
-#modern-config-incompatible
-#inprocess-hg-incompatible
-
 #require no-eden
-
-  $ setconfig experimental.allowfilepeer=True
-
-  $ configure modern
 
   $ newserver server
   $ cd $TESTTMP/server

@@ -3,10 +3,9 @@
 # This software may be used and distributed according to the terms of the
 # GNU General Public License version 2.
 
-import json
+from collections import defaultdict
 
 from .. import cmdutil, context, error, hg, merge as mergemod, node, scmutil
-
 from ..cmdutil import (
     commitopts,
     commitopts2,
@@ -15,12 +14,8 @@ from ..cmdutil import (
     subtree_path_opts,
 )
 from ..i18n import _
+from ..utils.subtreeutil import gen_branch_info, get_branch_info, get_merge_info
 from .cmdtable import command
-
-
-# todo: remove the 'test_' prefix when this feature is stable
-SUBTREE_BRANCH_INFO_KEY = "test_branch_info"
-SUBTREE_MERGE_INFO_KEY = "test_subtree_merge_info"
 
 
 @command(
@@ -85,6 +80,7 @@ def subtree_copy(ui, repo, *args, **opts):
             _("record the current user as committer"),
         ),
     ]
+    + commitopts
     + commitopts2
     + mergetoolopts
     + dryrunopts
@@ -189,11 +185,9 @@ def _subtree_merge_base(repo, to_ctx, to_path, from_ctx, from_path):
 
         # check merge info
         if merge_info := get_merge_info(repo, heads[i]):
-            if (
-                merge_info["to_path"] == paths[i]
-                and merge_info["from_path"] == paths[1 - i]
-            ):
-                return merge_info["from_commit"]
+            for merge in merge_info["merges"]:
+                if merge["to_path"] == paths[i] and merge["from_path"] == paths[1 - i]:
+                    return merge["from_commit"]
 
         # check branch info
         if branch_info := get_branch_info(repo, heads[i]):
@@ -242,7 +236,7 @@ def _docopy(ui, repo, *args, **opts):
     text = opts.get("message")
 
     extra = {}
-    extra.update(_gen_branch_info(from_ctx.hex(), from_paths, to_paths))
+    extra.update(gen_branch_info(from_ctx.hex(), from_paths, to_paths))
 
     summaryfooter = _gen_prepopulated_commit_msg(from_ctx, from_paths, to_paths)
     editform = cmdutil.mergeeditform(repo[None], "subtree.copy")
@@ -267,23 +261,6 @@ def _docopy(ui, repo, *args, **opts):
     hg.update(repo, newid)
 
 
-def _gen_branch_info(from_commit, from_paths, to_paths):
-    value = {
-        "v": 1,
-        "branches": [
-            {
-                "from_path": from_path,
-                "to_path": to_path,
-                "from_commit": from_commit,
-            }
-            for from_path, to_path in zip(from_paths, to_paths)
-        ],
-    }
-    # compact JSON representation
-    str_val = json.dumps(value, separators=(",", ":"))
-    return {SUBTREE_BRANCH_INFO_KEY: str_val}
-
-
 def _gen_prepopulated_commit_msg(from_commit, from_paths, to_paths):
     full_commit_hash = from_commit.hex()
     msgs = [f"Subtree copy from {full_commit_hash}"]
@@ -292,21 +269,15 @@ def _gen_prepopulated_commit_msg(from_commit, from_paths, to_paths):
     return "\n".join(msgs)
 
 
-def get_branch_info(repo, node):
-    return _get_subtree_metadata(repo, node, SUBTREE_BRANCH_INFO_KEY)
+def gen_merge_commit_msg(subtree_merges):
+    groups = defaultdict(list)
+    for from_node, from_path, to_path in subtree_merges:
+        groups[from_node].append((from_path, to_path))
 
-
-def get_merge_info(repo, node):
-    return _get_subtree_metadata(repo, node, SUBTREE_MERGE_INFO_KEY)
-
-
-def _get_subtree_metadata(repo, node, key):
-    extra = repo[node].extra()
-    try:
-        val_str = extra[key]
-    except KeyError:
-        return None
-    try:
-        return json.loads(val_str)
-    except json.JSONDecodeError:
-        raise error.Abort(f"invalid {key} metadata: {val_str}")
+    msgs = []
+    for from_node, paths in groups.items():
+        from_commit = node.hex(from_node)
+        msgs.append(f"Subtree merge from {from_commit}")
+        for from_path, to_path in paths:
+            msgs.append(f"- Merged path {from_path} to {to_path}")
+    return "\n".join(msgs)

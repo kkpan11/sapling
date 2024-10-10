@@ -18,6 +18,7 @@ import hashlib
 from typing import List, Tuple
 
 import bindings
+
 from sapling import tracing
 
 from . import (
@@ -43,7 +44,6 @@ from . import (
 )
 from .i18n import _
 from .node import bin, hex, nullid
-
 
 urlerr = util.urlerr
 urlreq = util.urlreq
@@ -1509,17 +1509,7 @@ pulldiscoverymapping = {}
 
 
 def _httpcommitgraphenabled(pullop):
-    repo = pullop.repo
-    if repo.nullableedenapi is None:
-        return None
-
-    if not pullop.newpull:
-        return None
-
-    if pullop.remote.capable("commitgraph2") or repo.ui.configbool(
-        "pull", "httpcommitgraph2"
-    ):
-        return "v2"
+    return pullop.repo.nullableedenapi and pullop.newpull
 
 
 def pulldiscovery(stepname):
@@ -1778,7 +1768,7 @@ def _pullcommitgraph(pullop, version):
 
     commits = repo.changelog.inner
     common = pullop.common
-    items = repo.edenapi.commitgraph2(heads, common)
+    items = repo.edenapi.commitgraph(heads, common)
     graphnodes = []
     draftnodes = []
     allphasesreturned = True

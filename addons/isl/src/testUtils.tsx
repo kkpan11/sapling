@@ -144,7 +144,7 @@ export const emptyCommit: CommitInfo = {
   description: '',
   bookmarks: [],
   remoteBookmarks: [],
-  filesSample: [],
+  filePathsSample: [],
   totalFileCount: 0,
   maxCommonPathPrefix: '',
 };
