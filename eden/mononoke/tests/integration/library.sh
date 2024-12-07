@@ -263,7 +263,7 @@ function mononoke_x_repo_sync() {
     --source-repo-id="$source_repo_id" \
     --target-repo-id="$target_repo_id" \
     --mononoke-config-path "$TESTTMP/mononoke-config" \
-    --scuba-dataset "file://$TESTTMP/x_repo_sync_scuba_logs" \
+    --scuba-log-file "$TESTTMP/x_repo_sync_scuba_logs" \
     "$@"
 }
 
@@ -346,8 +346,12 @@ function mononoke_modern_sync {
     "${COMMON_ARGS[@]}" \
     --repo-id "$REPOID" \
     --mononoke-config-path "$TESTTMP/mononoke-config" \
-    sync-once --start-id "$START_ID" \
-    --dry-run
+    --dest-socket $MONONOKE_SOCKET \
+    --tls-ca "$TEST_CERTDIR/root-ca.crt" \
+    --tls-private-key "$TEST_CERTDIR/localhost.key" \
+    --tls-certificate "$TEST_CERTDIR/localhost.crt" \
+    --scuba-log-file "$TESTTMP/modern_sync_scuba_logs" \
+    sync-once --start-id "$START_ID"
 }
 
 function mononoke_admin {
@@ -382,7 +386,7 @@ function repo_metadata_logger {
   GLOG_minloglevel=5 "$REPO_METADATA_LOGGER" \
     "${CACHE_ARGS[@]}" \
     "${COMMON_ARGS[@]}" \
-    --scuba-dataset "file://$TESTTMP/metadata_logger_scuba_logs" \
+    --scuba-log-file "$TESTTMP/metadata_logger_scuba_logs" \
     --mononoke-config-path "$TESTTMP"/mononoke-config "$@"
 }
 
@@ -926,7 +930,7 @@ function _megarepo_async_worker_cmd {
   GLOG_minloglevel=5 "$ASYNC_REQUESTS_WORKER" "$@" \
     --log-level INFO \
     --mononoke-config-path "$TESTTMP/mononoke-config" \
-    --scuba-dataset "file://$TESTTMP/async-worker.json" \
+    --scuba-log-file "$TESTTMP/async-worker.json" \
     "${CACHE_ARGS[@]}" \
     "${COMMON_ARGS[@]}"
 }
@@ -1024,6 +1028,7 @@ function lfs_server {
       shift
     elif
       [[ "$1" = "--scuba-dataset" ]] ||
+      [[ "$1" = "--scuba-log-file" ]] ||
       [[ "$1" = "--max-upload-size" ]]
     then
       opts=("${opts[@]}" "$1" "$2")
@@ -1091,7 +1096,7 @@ function mononoke_git_service {
     --tls-certificate "$TEST_CERTDIR/localhost.crt" \
     --tls-ticket-seeds "$TEST_CERTDIR/server.pem.seeds" \
     --listen-port 0 \
-    --scuba-dataset "file://$TESTTMP/scuba.json" \
+    --scuba-log-file "$TESTTMP/scuba.json" \
     --log-level DEBUG \
     --mononoke-config-path "$TESTTMP/mononoke-config" \
     --bound-address-file "$TESTTMP/mononoke_git_service_addr.txt" \
@@ -1839,4 +1844,8 @@ function wait_for_bookmark_move_to_commit {
   echo "bookmark didn't move to commit $commit_title" >&2
   exit 1
 
+}
+
+function fb303-status() {
+  $FB303_STATUS "$@"
 }
