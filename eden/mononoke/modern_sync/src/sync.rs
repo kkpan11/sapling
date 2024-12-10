@@ -20,8 +20,10 @@ use clientinfo::ClientInfo;
 use cloned::cloned;
 use commit_graph::CommitGraphArc;
 use context::CoreContext;
+use context::SessionContainer;
 use futures::StreamExt;
 use futures::TryStreamExt;
+use metadata::Metadata;
 use mononoke_app::args::RepoArg;
 use mononoke_app::MononokeApp;
 use mononoke_types::ChangesetId;
@@ -32,14 +34,22 @@ use repo_derived_data::RepoDerivedDataRef;
 use repo_identity::RepoIdentityRef;
 use slog::info;
 use slog::Logger;
+use stats::prelude::*;
 use url::Url;
 
 use crate::bul_util;
 use crate::sender::dummy::DummySender;
 use crate::sender::edenapi::EdenapiSender;
 use crate::sender::ModernSyncSender;
+use crate::ModernSyncArgs;
 use crate::Repo;
 const MODERN_SYNC_COUNTER_NAME: &str = "modern_sync";
+
+define_stats! {
+    prefix = "mononoke.modern_sync";
+    completion_duration_secs: timeseries(Average, Sum, Count),
+    synced_commits:  dynamic_timeseries("{}.commits_synced", (repo: String); Rate, Sum),
+}
 
 #[derive(Clone)]
 pub enum ExecutionType {
@@ -69,12 +79,21 @@ pub async fn sync(
 
     let logger = app.logger().clone();
 
-    let ctx = CoreContext::new_with_logger_and_client_info(
-        app.fb,
-        logger.clone(),
-        ClientInfo::default_with_entry_point(ClientEntryPoint::ModernSync),
-    )
-    .clone_with_repo_name(&repo_name);
+    let mut metadata = Metadata::default();
+    metadata.add_client_info(ClientInfo::default_with_entry_point(
+        ClientEntryPoint::ModernSync,
+    ));
+
+    let mut scuba = app.environment().scuba_sample_builder.clone();
+    scuba.add_metadata(&metadata);
+
+    let session_container = SessionContainer::builder(app.fb)
+        .metadata(Arc::new(metadata))
+        .build();
+
+    let ctx = session_container
+        .new_context(app.logger().clone(), scuba)
+        .clone_with_repo_name(&repo_name.clone());
 
     borrowed!(ctx);
     let start_id = if let Some(id) = start_id_arg {
@@ -96,8 +115,29 @@ pub async fn sync(
     let sender: Arc<dyn ModernSyncSender + Send + Sync> = if dry_run {
         Arc::new(DummySender::new(logger.clone()))
     } else {
-        Arc::new(EdenapiSender::new(Url::parse(&config.url)?, repo_name)?)
+        let app_args = app.args::<ModernSyncArgs>()?;
+        let url = if let Some(socket) = app_args.dest_socket {
+            // Only for integration tests
+            format!("{}:{}/edenapi/", &config.url, socket)
+        } else {
+            format!("{}/edenapi/", &config.url)
+        };
+
+        let tls_args = app_args
+            .tls_params
+            .clone()
+            .ok_or_else(|| format_err!("TLS params not found for repo {}", repo_name))?;
+
+        let dest_repo = app_args.dest_repo_name.clone().unwrap_or(repo_name.clone());
+
+        Arc::new(EdenapiSender::new(Url::parse(&url)?, dest_repo, logger.clone(), tls_args).await?)
     };
+
+    let mut scuba_sample = ctx.scuba().clone();
+    scuba_sample.add("repo", repo_name);
+    scuba_sample.add("start_id", start_id);
+    scuba_sample.add("dry_run", dry_run);
+    scuba_sample.log();
 
     bul_util::read_bookmark_update_log(
         ctx,
@@ -124,7 +164,8 @@ pub async fn sync(
                         .try_next_step(move |cs_id| {
                             cloned!(ctx, repo, logger, sender);
                             async move {
-                                process_one_changeset(&cs_id, &ctx, repo, &logger, sender).await
+                                process_one_changeset(&cs_id, &ctx, repo, &logger, sender, false)
+                                    .await
                             }
                         })
                         .try_collect::<()>()
@@ -140,14 +181,16 @@ pub async fn sync(
     Ok(())
 }
 
-async fn process_one_changeset(
+pub async fn process_one_changeset(
     cs_id: &ChangesetId,
     ctx: &CoreContext,
     repo: Repo,
     logger: &Logger,
     sender: Arc<dyn ModernSyncSender + Send + Sync>,
+    log_completion: bool,
 ) -> Result<()> {
     info!(logger, "Found commit {:?}", cs_id);
+
     let cs_info = repo
         .repo_derived_data()
         .derive::<ChangesetInfo>(ctx, cs_id.clone())
@@ -169,5 +212,10 @@ async fn process_one_changeset(
             sender.upload_content(bs, blob);
         }
     }
+
+    if log_completion {
+        STATS::synced_commits.add_value(1, (repo.repo_identity().name().to_string(),));
+    }
+
     Ok(())
 }

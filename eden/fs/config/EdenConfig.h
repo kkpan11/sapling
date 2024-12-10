@@ -1657,11 +1657,11 @@ class EdenConfig : private ConfigSettingManager {
       this};
 
   /**
-   * Set of known VCS directories - used to filter changesSinceV2 results.
+   * Vector of known VCS directories - used to filter changesSinceV2 results.
    */
-  ConfigSetting<std::unordered_set<RelativePath>> vcsDirectories{
+  ConfigSetting<std::vector<RelativePath>> vcsDirectories{
       "notify:vcs-directories",
-      {RelativePath{".hg"}, RelativePath{".git"}},
+      {RelativePath{".hg"}, RelativePath{".git"}, RelativePath{".sl"}},
       this};
 
 // [facebook]
