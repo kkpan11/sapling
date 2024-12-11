@@ -113,10 +113,21 @@ export enum ArchivedReasonType {
   STALE_FILE_CHANGED = 'STALE_FILE_CHANGED',
 }
 
+export type CodeChange = {
+  oldContent?: string;
+  newContent?: string;
+  oldLineNumber?: number;
+  trimmedLineNumber?: number;
+  trimmedLength?: number;
+  adjustedLineNumber?: number;
+  patch?: ParsedDiff;
+};
+
 export type SuggestedChange = {
   id?: string;
   type?: SuggestedChangeType;
   codePatchSuggestionID?: string;
+  codePatchID?: string;
   status?: CodePatchSuggestionStatus;
   archivedState?: ArchivedStateType;
   archivedReason?: ArchivedReasonType;
@@ -124,9 +135,7 @@ export type SuggestedChange = {
   patch?: ParsedDiff;
   oldPath?: string;
   currentPath?: string;
-  oldContent?: string;
-  newContent?: string;
-  oldLineNumber?: number;
+  codeChange?: CodeChange[];
 };
 
 export type DiffComment = {
@@ -291,8 +300,6 @@ export type StableInfo = {
 export type SlocInfo = {
   /** Significant lines of code for commit */
   sloc: number | undefined;
-  /** Significant lines of code for commit (filtering out test and markdown files) */
-  strictSloc: number | undefined;
 };
 
 export type CommitInfo = {
@@ -582,6 +589,7 @@ export type OperationProgress =
   | {id: string; kind: 'inlineProgress'; hash?: string; message?: string}
   | {id: string; kind: 'exit'; exitCode: number; timestamp: number}
   | {id: string; kind: 'error'; error: string}
+  | {id: string; kind: 'warning'; warning: string}
   // used by requestMissedOperationProgress, client thinks this operation is running but server no longer knows about it.
   | {id: string; kind: 'forgot'};
 
@@ -589,6 +597,7 @@ export type ProgressStep = {
   message: string;
   progress?: number;
   progressTotal?: number;
+  unit?: string;
 };
 
 export type OperationCommandProgressReporter = (
@@ -599,6 +608,7 @@ export type OperationCommandProgressReporter = (
     // null message -> clear inline progress for this hash. Null hash -> apply to all affected hashes (set message or clear)
     | [type: 'inlineProgress', hash?: string, message?: string]
     | ['progress', ProgressStep]
+    | ['warning', string]
     | ['exit', number]
 ) => void;
 
@@ -781,7 +791,8 @@ export type LocalStorageName =
   | 'isl.hide-non-blocking-diagnostics'
   | 'isl.rebase-off-warm-warning-enabled'
   // These keys are prefixes, with further dynamic keys appended afterwards
-  | 'isl.edited-commit-messages:';
+  | 'isl.edited-commit-messages:'
+  | 'isl.partial-abort';
 
 export type ClientToServerMessage =
   | {type: 'heartbeat'; id: string}
@@ -949,19 +960,19 @@ export type ServerToClientMessage =
   | {
       type: 'fetchedSignificantLinesOfCode';
       hash: Hash;
-      result: Result<{linesOfCode: number; strictLinesOfCode: number}>;
+      result: Result<number>;
     }
   | {
       type: 'fetchedPendingSignificantLinesOfCode';
       requestId: number;
       hash: Hash;
-      result: Result<{linesOfCode: number; strictLinesOfCode: number}>;
+      result: Result<number>;
     }
   | {
       type: 'fetchedPendingAmendSignificantLinesOfCode';
       requestId: number;
       hash: Hash;
-      result: Result<{linesOfCode: number; strictLinesOfCode: number}>;
+      result: Result<number>;
     };
 export type Disposable = {
   dispose(): void;

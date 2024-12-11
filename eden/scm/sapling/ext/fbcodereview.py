@@ -137,7 +137,7 @@ def singlepublicbase(repo, ctx, templ, **args):
 
 @templatekeyword("reviewers")
 def showreviewers(repo, ctx, templ, **args):
-    """String. Return the phabricator diff id for a given @prog@ rev."""
+    """String. Return a space-separated list of diff reviewers for a given @prog@ rev."""
     if ctx.node() is None:
         # working copy - use committemplate.reviewers, which can be found at
         # templ.t.cache.
@@ -747,7 +747,9 @@ def uisetup(ui) -> None:
 
         extensions.wrapfunction(uimod, "_auto_username", _auto_username)
 
-    ui.setconfig(
+
+def reposetup(ui, repo):
+    repo.ui.setconfig(
         "hooks", "post-pull.marklanded", _get_shell_cmd(ui, ["debugmarklanded"])
     )
 

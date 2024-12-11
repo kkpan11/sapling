@@ -18,7 +18,6 @@ import {Center} from '../ComponentUtils';
 import {confirmNoBlockingDiagnostics} from '../Diagnostics';
 import {getCachedGeneratedFileStatuses, useGeneratedFileStatuses} from '../GeneratedFile';
 import {numPendingImageUploads} from '../ImageUpload';
-import {Internal} from '../Internal';
 import {Link} from '../Link';
 import {OperationDisabledButton} from '../OperationDisabledButton';
 import {SubmitSelectionButton} from '../SubmitSelectionButton';
@@ -35,7 +34,6 @@ import {
 import {submitAsDraft, SubmitAsDraftCheckbox} from '../codeReview/DraftCheckbox';
 import {showBranchingPrModal} from '../codeReview/github/BranchingPrModal';
 import {overrideDisabledSubmitModes} from '../codeReview/github/branchPrState';
-import GatedComponent from '../components/GatedComponent';
 import {FoldButton, useRunFoldPreview} from '../fold';
 import {t, T} from '../i18n';
 import {IrrelevantCwdIcon} from '../icons/IrrelevantCwdIcon';
@@ -59,6 +57,7 @@ import {CommitPreview, dagWithPreviews, uncommittedChangesWithPreviews} from '..
 import {repoRelativeCwd, useIsIrrelevantToCwd} from '../repositoryData';
 import {selectedCommits} from '../selection';
 import {commitByHash, latestHeadCommit, repositoryInfo} from '../serverAPIState';
+import {SplitButton} from '../stackEdit/ui/SplitButton';
 import {latestSuccessorUnlessExplicitlyObsolete} from '../successionUtils';
 import {showToast} from '../toast';
 import {GeneratedStatus, succeedableRevset} from '../types';
@@ -86,7 +85,6 @@ import {
 } from './CommitMessageFields';
 import {DiffStats, PendingDiffStats} from './DiffStats';
 import {FillCommitMessage} from './FillCommitMessage';
-import SplitSuggestion from './SplitSuggestion';
 import {CommitTitleByline, getFieldToAutofocus, Section, SmallCapsTitle} from './utils';
 import deepEqual from 'fast-deep-equal';
 import {Badge} from 'isl-components/Badge';
@@ -377,11 +375,7 @@ export function CommitInfoDetails({commit}: {commit: CommitInfo}) {
                 {uncommittedChanges.length}
               </Badge>
             </SmallCapsTitle>
-            {uncommittedChanges.length > 0 ? (
-              <GatedComponent featureFlag={Internal.featureFlags?.ShowSplitSuggestion}>
-                <PendingDiffStats />
-              </GatedComponent>
-            ) : null}
+            {uncommittedChanges.length > 0 ? <PendingDiffStats /> : null}
             {uncommittedChanges.length === 0 ? (
               <Subtle>
                 {isCommitMode ? <T>No changes to commit</T> : <T>No changes to amend</T>}
@@ -397,15 +391,14 @@ export function CommitInfoDetails({commit}: {commit: CommitInfo}) {
               <T>Files Changed</T>
               <Badge>{commit.totalFileCount}</Badge>
             </SmallCapsTitle>
-            <GatedComponent featureFlag={Internal.featureFlags?.ShowSplitSuggestion}>
-              <DiffStats commit={commit} />
-            </GatedComponent>
+            <DiffStats commit={commit} />
             <div className="changed-file-list">
               <div className="button-row">
                 <OpenComparisonViewButton
                   comparison={{type: ComparisonType.Committed, hash: commit.hash}}
                 />
                 <OpenAllFilesButton commit={commit} />
+                <SplitButton trackerEventName="SplitOpenFromSplitSuggestion" commit={commit} />
               </div>
               <ChangedFilesWithFetching commit={commit} />{' '}
             </div>
@@ -418,7 +411,6 @@ export function CommitInfoDetails({commit}: {commit: CommitInfo}) {
             <FoldPreviewActions />
           ) : (
             <>
-              {isSplitSuggestionSupported ? <SplitSuggestion commit={commit} /> : null}
               <ActionsBar
                 commit={commit}
                 latestMessage={parsedFields}
