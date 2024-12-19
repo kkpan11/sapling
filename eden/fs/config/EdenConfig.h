@@ -1239,18 +1239,6 @@ class EdenConfig : private ConfigSettingManager {
       false,
       this};
 
-  /**
-   * Controls if batches are sent to Sapling with FetchMode::AllowRemote
-   * or batches are sent to Sapling with FetchMode::LocalOnly and then the
-   * failed requests are sent to Sapling again with FetchMode::RemoteOnly.
-   *
-   * This is a temporary option to test metrics on this new way of batching
-   */
-  ConfigSetting<bool> allowRemoteGetBatch{
-      "experimental:allow-remote-get-batch",
-      true,
-      this};
-
   // [blobcache]
 
   /**
@@ -1657,11 +1645,11 @@ class EdenConfig : private ConfigSettingManager {
       this};
 
   /**
-   * Set of known VCS directories - used to filter changesSinceV2 results.
+   * Vector of known VCS directories - used to filter changesSinceV2 results.
    */
-  ConfigSetting<std::unordered_set<RelativePath>> vcsDirectories{
+  ConfigSetting<std::vector<RelativePath>> vcsDirectories{
       "notify:vcs-directories",
-      {RelativePath{".hg"}, RelativePath{".git"}},
+      {RelativePath{".hg"}, RelativePath{".git"}, RelativePath{".sl"}},
       this};
 
 // [facebook]

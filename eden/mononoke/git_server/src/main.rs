@@ -58,8 +58,8 @@ use mononoke_app::args::RepoFilterAppExtension;
 use mononoke_app::args::ShutdownTimeoutArgs;
 use mononoke_app::args::TLSArgs;
 use mononoke_app::args::WarmBookmarksCacheExtension;
-use mononoke_app::fb303::AliveService;
-use mononoke_app::fb303::Fb303AppExtension;
+use mononoke_app::monitoring::AliveService;
+use mononoke_app::monitoring::MonitoringAppExtension;
 use mononoke_app::MononokeApp;
 use mononoke_app::MononokeAppBuilder;
 use mononoke_app::MononokeReposManager;
@@ -167,11 +167,11 @@ fn main(fb: FacebookInit) -> Result<(), Error> {
         .with_entry_point(ClientEntryPoint::MononokeGitServer)
         .with_bookmarks_cache(BookmarkCacheOptions {
             cache_kind: BookmarkCacheKind::Local,
-            derived_data: BookmarkCacheDerivedData::NoDerivation, // Derivation is already done at push time
+            derived_data: BookmarkCacheDerivedData::GitOnly, // Although derivation is already done at push time, commits landed through SCS still need WBC
         })
         .with_app_extension(WarmBookmarksCacheExtension {})
         .with_app_extension(McrouterAppExtension {})
-        .with_app_extension(Fb303AppExtension {})
+        .with_app_extension(MonitoringAppExtension {})
         .with_app_extension(RepoFilterAppExtension {})
         .with_cachelib_settings(cachelib_settings)
         .build::<GitServerArgs>()?;
@@ -217,7 +217,7 @@ fn main(fb: FacebookInit) -> Result<(), Error> {
         .sharded_service_name
         .as_ref()
         .map(|_| ShardedService::MononokeGitServer);
-    app.start_monitoring(SERVICE_NAME, AliveService)?;
+    app.start_monitoring(app.runtime(), SERVICE_NAME, AliveService)?;
     app.start_stats_aggregation()?;
 
     let requests_counter = Arc::new(AtomicI64::new(0));

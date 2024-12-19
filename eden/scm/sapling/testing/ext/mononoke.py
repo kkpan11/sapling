@@ -807,11 +807,10 @@ sync_all_bookmarks=true
 """
     )
 
-    mononoke_socket = env.getenv("MONONOKE_SOCKET")
     append_config(
         f"""
 [modern_sync_config]
-url=\"https://localhost:{mononoke_socket}/edenapi/\"
+url=\"https://localhost\"
 """
     )
 
@@ -1348,6 +1347,8 @@ def setup_environment_variables(stderr: BinaryIO, fs: ShellFS, env: Env) -> int:
         "--with-test-megarepo-configs-client=true",
         "--acl-file",
         acl_file,
+        "--runtime-threads",
+        "6",
     ]
     all_args = " ".join(common_args)
     env.setenv("COMMON_ARGS_U", all_args)

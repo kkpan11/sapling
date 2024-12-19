@@ -36,10 +36,10 @@ import {Row} from './ComponentUtils';
 import {FileTree, FileTreeFolderHeader} from './FileTree';
 import {useGeneratedFileStatuses} from './GeneratedFile';
 import {Internal} from './Internal';
+import {AbsorbButton} from './StackActions';
 import {UnsavedFilesCount, confirmUnsavedFiles} from './UnsavedFiles';
 import {tracker} from './analytics';
 import {latestCommitMessageFields} from './codeReview/CodeReviewInfo';
-import GatedComponent from './components/GatedComponent';
 import {islDrawerState} from './drawerState';
 import {externalMergeToolAtom} from './externalMergeTool';
 import {T, t} from './i18n';
@@ -48,6 +48,8 @@ import {localStorageBackedAtom, readAtom, useAtomGet, writeAtom} from './jotaiUt
 import {
   AutoResolveSettingCheckbox,
   shouldAutoResolveAllBeforeContinue,
+  shouldPartialAbort,
+  PartialAbortSettingCheckbox,
 } from './mergeConflicts/state';
 import {AbortMergeOperation} from './operations/AbortMergeOperation';
 import {AddRemoveOperation} from './operations/AddRemoveOperation';
@@ -705,6 +707,7 @@ export function UncommittedChanges({place}: {place: Place}) {
                 <T>Discard</T>
               </Button>
             </Tooltip>
+            <AbsorbButton />
           </>
         )}
       </div>
@@ -731,11 +734,9 @@ export function UncommittedChanges({place}: {place: Place}) {
       <UnsavedFilesCount />
       {conflicts != null || place !== 'main' ? null : (
         <div className="button-rows">
-          <GatedComponent featureFlag={Internal.featureFlags?.ShowSplitSuggestion}>
-            <div className="button-row">
-              <PendingDiffStats showWarning={true} />
-            </div>
-          </GatedComponent>
+          <div className="button-row">
+            <PendingDiffStats />
+          </div>
           <div className="button-row">
             <span className="quick-commit-inputs">
               <Button
@@ -913,7 +914,9 @@ function MergeConflictButtons({
         key="abort"
         disabled={shouldDisableButtons}
         onClick={() => {
-          runOperation(new AbortMergeOperation(conflicts));
+          const partialAbortAvailable = conflicts?.command === 'rebase';
+          const isPartialAbort = partialAbortAvailable && readAtom(shouldPartialAbort);
+          runOperation(new AbortMergeOperation(conflicts, isPartialAbort));
         }}>
         <Icon slot="start" icon={isRunningAbort ? 'loading' : 'circle-slash'} />
         <T>Abort</T>
@@ -982,6 +985,7 @@ function MergeConflictButtons({
       {Internal.showInlineAutoRunMergeDriversOption === true && (
         <AutoResolveSettingCheckbox subtle />
       )}
+      {conflicts?.command === 'rebase' && <PartialAbortSettingCheckbox subtle />}
     </Row>
   );
 }
