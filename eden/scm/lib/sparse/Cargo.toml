@@ -21,12 +21,13 @@ regex = "1.9.2"
 sapling-pathmatcher = { version = "0.1.0", path = "../pathmatcher" }
 sapling-rewrite-macros = { version = "0.1.0", path = "../util/rewrite-macros" }
 sapling-types = { version = "0.1.0", path = "../types" }
-thiserror = "1.0.64"
+thiserror = "2"
+tokio = { version = "1.41.0", features = ["full", "test-util", "tracing"], optional = true }
 tracing = { version = "0.1.40", features = ["attributes", "valuable"] }
 
 [dev-dependencies]
 tokio = { version = "1.41.0", features = ["full", "test-util", "tracing"] }
 
 [features]
-async = ["futures"]
+async = ["futures", "tokio"]
 default = []

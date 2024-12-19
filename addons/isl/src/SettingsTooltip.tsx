@@ -9,7 +9,6 @@ import type {ThemeColor} from './theme';
 import type {PreferredSubmitCommand} from './types';
 
 import {rebaseOffWarmWarningEnabled} from './Commit';
-import {splitSuggestionEnabled} from './CommitInfoView/SplitSuggestion';
 import {condenseObsoleteStacks} from './CommitTreeList';
 import {Column, Row} from './ComponentUtils';
 import {confirmShouldSubmitEnabledAtom} from './ConfirmSubmitStack';
@@ -19,6 +18,7 @@ import {Internal} from './Internal';
 import {Link} from './Link';
 import {RestackBehaviorSetting} from './RestackBehavior';
 import {Setting} from './Setting';
+import {hasExperimentalFeatures} from './atoms/experimentalFeatureAtoms';
 import {codeReviewProvider} from './codeReview/CodeReviewInfo';
 import {showDiffNumberConfig} from './codeReview/DiffBadge';
 import {SubmitAsDraftCheckbox} from './codeReview/DraftCheckbox';
@@ -129,9 +129,6 @@ function SettingsDropdown({
           <RenderCompactSetting />
           <CondenseObsoleteSetting />
           <DeemphasizeIrrelevantCommitsSetting />
-          <GatedComponent featureFlag={Internal.featureFlags?.ShowSplitSuggestion}>
-            <SplitSuggestionSetting />
-          </GatedComponent>
           <RebaseOffWarmWarningSetting />
         </Column>
       </Setting>
@@ -314,22 +311,6 @@ function RebaseOffWarmWarningSetting() {
   );
 }
 
-function SplitSuggestionSetting() {
-  const [value, setValue] = useAtom(splitSuggestionEnabled);
-  return (
-    <Tooltip title={t('Suggest splitting up large commits with a banner')}>
-      <Checkbox
-        data-testid="split-suggestion-enabled"
-        checked={value}
-        onChange={checked => {
-          setValue(checked);
-        }}>
-        <T>Show Split Suggestion</T>
-      </Checkbox>
-    </Tooltip>
-  );
-}
-
 export const openFileCmdAtom = configBackedAtom<string | null>(
   'isl.open-file-cmd',
   null,
@@ -477,6 +458,8 @@ function DebugToolsField() {
   const provider = useAtomValue(codeReviewProvider);
 
   const [branchPrsEnabled, setBranchPrsEnabled] = useAtom(experimentalBranchPRsEnabled);
+  const [experimentalFeaturesEnabled, setExperimentalFeaturesEnabled] =
+    useAtom(hasExperimentalFeatures);
 
   return (
     <DropdownField title={t('Debug Tools & Experimental')}>
@@ -487,6 +470,13 @@ function DebugToolsField() {
             setIsDebug(checked);
           }}>
           <T>Enable Debug Tools</T>
+        </Checkbox>
+        <Checkbox
+          checked={experimentalFeaturesEnabled}
+          onChange={checked => {
+            setExperimentalFeaturesEnabled(checked);
+          }}>
+          <T>Enable Experimental Features</T>
         </Checkbox>
         {provider?.submitDisabledReason?.() != null && (
           <Checkbox

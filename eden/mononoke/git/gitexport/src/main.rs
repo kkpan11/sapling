@@ -17,7 +17,6 @@ use anyhow::Error;
 use anyhow::Ok;
 use anyhow::Result;
 use bookmarks_types::BookmarkKey;
-use cmdlib_logging::ScubaLoggingArgs;
 use commit_id::parse_commit_id;
 use derived_data_remote::RemoteDerivationArgs;
 use fbinit::FacebookInit;
@@ -37,8 +36,8 @@ use mononoke_api::CoreContext;
 use mononoke_api::MononokeRepo;
 use mononoke_api::Repo;
 use mononoke_api::RepoContext;
-use mononoke_app::fb303::AliveService;
-use mononoke_app::fb303::Fb303AppExtension;
+use mononoke_app::monitoring::AliveService;
+use mononoke_app::monitoring::MonitoringAppExtension;
 use mononoke_app::MononokeApp;
 use mononoke_app::MononokeAppBuilder;
 use mononoke_repos::MononokeRepos;
@@ -173,17 +172,11 @@ fn main(fb: FacebookInit) -> Result<(), Error> {
         derive_remotely: true,
     };
 
-    let default_scuba_logging_args = ScubaLoggingArgs {
-        scuba_dataset: Some("mononoke_gitexport".to_string()),
-        no_default_scuba_dataset: false,
-        warm_bookmark_cache_scuba_dataset: None,
-    };
-
     let app: MononokeApp = MononokeAppBuilder::new(fb)
         .with_arg_defaults(read_only_storage)
         .with_arg_defaults(remove_derivation_args)
-        .with_arg_defaults(default_scuba_logging_args)
-        .with_app_extension(Fb303AppExtension {})
+        .with_default_scuba_dataset("mononoke_gitexport")
+        .with_app_extension(MonitoringAppExtension {})
         .build::<GitExportArgs>()?;
 
     app.run_with_monitoring_and_logging(async_main, "gitexport", AliveService)
