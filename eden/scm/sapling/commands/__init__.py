@@ -2193,6 +2193,10 @@ def diff(ui, repo, *pats, **opts):
     Returns 0 on success.
     """
 
+    do_diff(ui, repo, *pats, **opts)
+
+
+def do_diff(ui, repo, *pats, **opts):
     revs = opts.get("rev")
     change = opts.get("change")
     stat = opts.get("stat")
@@ -2214,6 +2218,8 @@ def diff(ui, repo, *pats, **opts):
 
     from_paths = scmutil.rootrelpaths(ctx1, opts.get("from_path"))
     to_paths = scmutil.rootrelpaths(ctx1, opts.get("to_path"))
+    subtreeutil.validate_path_exist(ui, ctx1, from_paths, abort_on_missing=True)
+    subtreeutil.validate_path_exist(ui, ctx2, to_paths, abort_on_missing=True)
     cmdutil.registerdiffgrafts(from_paths, to_paths, ctx1)
 
     if onlyfilesinrevs:
@@ -3945,6 +3951,16 @@ def init(ui, dest=".", **opts):
         else:
             initial_config = None
             bindings.repo.repo.initialize(destpath, ui._rcfg, initial_config)
+
+            if util.istest():
+                # Mark legacy repos in tests with "eagercompat" requirement. This
+                # indicates they use an eager store under the hood and implement
+                # SaplingRemoteAPI.
+                repo = hg.repository(ui, destpath)
+                if repo.storage_format() == "revlog":
+                    with repo.lock():
+                        repo.storerequirements.add("eagercompat")
+                        repo._writestorerequirements()
 
 
 @command(

@@ -28,11 +28,11 @@ futures = { version = "0.3.30", features = ["async-await", "compat"] }
 futures_stats = { version = "0.1.0", git = "https://github.com/facebookexperimental/rust-shed.git", branch = "main" }
 git_source_of_truth = { version = "0.1.0", path = "../git_source_of_truth" }
 git_types = { version = "0.1.0", path = "../git/git_types" }
-gix-date = { git = "https://github.com/pierrechevalier83/gitoxide", rev = "a080348c2fefb7a300ec80f4481617f870065589" }
-gix-hash = { git = "https://github.com/pierrechevalier83/gitoxide", rev = "a080348c2fefb7a300ec80f4481617f870065589" }
-gix-object = { git = "https://github.com/pierrechevalier83/gitoxide", rev = "a080348c2fefb7a300ec80f4481617f870065589" }
-gix-packetline = { git = "https://github.com/pierrechevalier83/gitoxide", rev = "a080348c2fefb7a300ec80f4481617f870065589", features = ["blocking-io"] }
-gix-transport = { git = "https://github.com/pierrechevalier83/gitoxide", rev = "a080348c2fefb7a300ec80f4481617f870065589" }
+gix-date = "0.9.2"
+gix-hash = "0.15.1"
+gix-object = "0.46.0"
+gix-packetline = { version = "0.18.1", features = ["blocking-io"] }
+gix-transport = "0.43.1"
 gotham = "0.7.1"
 gotham_derive = "0.7.0"
 gotham_ext = { version = "0.1.0", path = "../gotham_ext" }
@@ -65,7 +65,7 @@ sharding_ext = { version = "0.1.0", path = "../cmdlib/sharding_ext" }
 slog = { version = "2.7", features = ["max_level_trace", "nested-values"] }
 stats = { version = "0.1.0", git = "https://github.com/facebookexperimental/rust-shed.git", branch = "main" }
 strum = { version = "0.26.2", features = ["derive"] }
-thiserror = "1.0.64"
+thiserror = "2"
 tokio = { version = "1.41.0", features = ["full", "test-util", "tracing"] }
 tokio-stream = { version = "0.1.16", features = ["fs", "io-util", "net", "signal", "sync", "time"] }
 tokio-util = { version = "0.7.12", features = ["full"] }

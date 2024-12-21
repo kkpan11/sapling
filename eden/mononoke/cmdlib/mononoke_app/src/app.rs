@@ -77,7 +77,7 @@ use crate::args::SourceAndTargetRepoArgs;
 use crate::extension::AppExtension;
 use crate::extension::AppExtensionArgsBox;
 use crate::extension::BoxedAppExtensionArgs;
-use crate::fb303::Fb303AppExtension;
+use crate::monitoring::MonitoringAppExtension;
 use crate::repos_manager::MononokeReposManager;
 
 define_stats! {
@@ -147,13 +147,24 @@ impl MononokeApp {
         ))
     }
 
-    /// Start the FB303 monitoring server for the provided service.
-    pub fn start_monitoring<Service>(&self, app_name: &str, service: Service) -> Result<()>
+    /// Start the monitoring server for the provided service.
+    pub fn start_monitoring<Service>(
+        &self,
+        handle: &Handle,
+        app_name: &str,
+        service: Service,
+    ) -> Result<()>
     where
         Service: Fb303Service + Sync + Send + 'static,
     {
-        let fb303_args = self.extension_args::<Fb303AppExtension>()?;
-        fb303_args.start_fb303_server(self.fb, app_name, self.logger(), service)?;
+        let monitoring_args = self.extension_args::<MonitoringAppExtension>()?;
+        monitoring_args.start_monitoring_server(
+            self.fb,
+            handle,
+            app_name,
+            self.logger(),
+            service,
+        )?;
         Ok(())
     }
 
@@ -201,14 +212,14 @@ impl MononokeApp {
         Fut: Future<Output = Result<()>>,
         Service: Fb303Service + Sync + Send + 'static,
     {
-        self.start_monitoring(app_name, service)?;
-        self.start_stats_aggregation()?;
-
-        let logger = self.logger().clone();
         let runtime = self
             .runtime
             .take()
             .ok_or_else(|| anyhow!("MononokeApp already started"))?;
+        self.start_monitoring(runtime.handle(), app_name, service)?;
+        self.start_stats_aggregation()?;
+
+        let logger = self.logger().clone();
         let result = runtime.block_on(main(self));
 
         if let Err(e) = result {
