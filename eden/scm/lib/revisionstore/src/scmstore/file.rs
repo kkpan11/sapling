@@ -58,7 +58,6 @@ use crate::lfs::LfsStore;
 use crate::scmstore::activitylogger::ActivityLogger;
 use crate::scmstore::fetch::FetchResults;
 use crate::scmstore::metrics::StoreLocation;
-use crate::ContentDataStore;
 use crate::ContentMetadata;
 use crate::Delta;
 use crate::LocalStore;
@@ -400,7 +399,7 @@ impl FileStore {
         let indexedlog_local = self.indexedlog_local.as_ref().ok_or_else(|| {
             anyhow!("trying to write non-LFS file but no local non-LFS IndexedLog is available")
         })?;
-        indexedlog_local.put_entry(Entry::new(key, bytes, meta))?;
+        indexedlog_local.put_entry(Entry::new(key.hgid, bytes, meta))?;
 
         Ok(())
     }
@@ -608,23 +607,6 @@ impl HgIdDataStore for FileStore {
         )
     }
 
-    fn get_meta(&self, key: StoreKey) -> Result<StoreResult<Metadata>> {
-        self.metrics.write().api.hg_getmeta.call(0);
-        Ok(
-            match self
-                .fetch(
-                    std::iter::once(key.clone()).filter_map(|sk| sk.maybe_into_key()),
-                    FileAttributes::CONTENT,
-                    FetchMode::AllowRemote,
-                )
-                .single()?
-            {
-                Some(entry) => StoreResult::Found(entry.content.unwrap().metadata()?),
-                None => StoreResult::NotFound(key),
-            },
-        )
-    }
-
     fn refresh(&self) -> Result<()> {
         self.refresh()
     }
@@ -700,25 +682,8 @@ impl HgIdMutableDeltaStore for FileStore {
     }
 }
 
-impl ContentDataStore for FileStore {
-    fn blob(&self, key: StoreKey) -> Result<StoreResult<Bytes>> {
-        self.metrics.write().api.contentdatastore_blob.call(0);
-        Ok(
-            match self
-                .fetch(
-                    std::iter::once(key.clone()).filter_map(|sk| sk.maybe_into_key()),
-                    FileAttributes::CONTENT,
-                    FetchMode::LocalOnly,
-                )
-                .single()?
-            {
-                Some(entry) => StoreResult::Found(entry.content.unwrap().file_content()?.0),
-                None => StoreResult::NotFound(key),
-            },
-        )
-    }
-
-    fn metadata(&self, key: StoreKey) -> Result<StoreResult<ContentMetadata>> {
+impl FileStore {
+    pub fn metadata(&self, key: StoreKey) -> Result<StoreResult<ContentMetadata>> {
         self.metrics.write().api.contentdatastore_metadata.call(0);
 
         if let Some(cache) = &self.lfs_cache {

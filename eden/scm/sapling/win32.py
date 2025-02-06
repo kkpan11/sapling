@@ -19,9 +19,7 @@ import msvcrt
 import os
 import random
 
-from . import encoding, pycompat
-from .pycompat import range
-
+from . import encoding
 
 # pyre-fixme[16]: Module `ctypes` has no attribute `WinDLL`.
 _kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
@@ -216,7 +214,7 @@ class CERT_CHAIN_PARA(ctypes.Structure):
     )
 
 
-# types of parameters of C functions used (required by pypy)
+# types of parameters of C functions used
 
 _crypt32.CertCreateCertificateContext.argtypes = [
     _DWORD,  # cert encoding
@@ -378,9 +376,6 @@ _kernel32.PeekNamedPipe.argtypes = [
 ]
 _kernel32.PeekNamedPipe.restype = _BOOL
 
-_kernel32.MoveFileExW.argtypes = [_LPCWSTR, _LPCWSTR, _DWORD]
-_kernel32.MoveFileExW.restype = _BOOL
-
 _kernel32.GetOEMCP.argtypes = []
 _kernel32.GetOEMCP.restype = _UINT
 
@@ -392,7 +387,7 @@ def _raiseoserror(name):
     if code > 0x7FFFFFFF:
         code -= 2**32
     err = ctypes.WinError(code=code)
-    raise OSError(err.errno, "%s: %s" % (name, encoding.strtolocal(err.strerror)))
+    raise OSError(err.errno, "%s: %s" % (name, err.strerror))
 
 
 def getfileinfo(name):
@@ -414,18 +409,6 @@ def getfileinfo(name):
         return fi
     finally:
         _kernel32.CloseHandle(fh)
-
-
-def movefileex(src, dst):
-    """Atomically rename file, while replacing the existing one
-
-    Note that this is not a contractual atomicity, but it is atomic
-    in practice if the rename happens within a volume."""
-    MOVEFILE_REPLACE_EXISTING = 0x1
-    if not _kernel32.MoveFileExW(
-        pathtowin32W(src), pathtowin32W(dst), MOVEFILE_REPLACE_EXISTING
-    ):
-        _raiseoserror(dst)
 
 
 def getcurrentprocstarttime():
@@ -590,7 +573,7 @@ def getuser():
     buf = ctypes.create_string_buffer(size.value + 1)
     if not _advapi32.GetUserNameA(ctypes.byref(buf), ctypes.byref(size)):
         raise ctypes.WinError()
-    return pycompat.decodeutf8(buf.value)
+    return buf.value.decode()
 
 
 _signalhandler = []

@@ -17,11 +17,9 @@ import struct
 
 import bindings
 
-from . import error, mdiff, pycompat, revlog, util
+from . import error, mdiff, revlog, util
 from .i18n import _
 from .node import bin
-from .pycompat import encodeutf8, unicode
-
 
 parsers = bindings.cext.parsers
 
@@ -42,7 +40,7 @@ def _parse(data):
         if prev is not None and prev > l:
             raise ValueError("Manifest lines not in sorted order.")
         prev = l
-        f, n = pycompat.decodeutf8(l).split("\0")
+        f, n = l.decode().split("\0")
         if len(n) > 40:
             yield f, bin(n[:40]), n[40:]
         else:
@@ -62,7 +60,7 @@ def _text(it):
         lines.append("%s\0%s%s\n" % (f, _hex(n), fl))
 
     _checkforbidden(files)
-    return pycompat.encodeutf8("".join(lines))
+    return "".join(lines).encode()
 
 
 def unhexlify(data, extra, pos, length):
@@ -114,7 +112,7 @@ class manifestdict:
         return self._lm.__iter__()
 
     def iterkeys(self):
-        return pycompat.iterkeys(self._lm)
+        return self._lm.keys()
 
     def keys(self):
         return list(self._lm.keys())
@@ -247,8 +245,6 @@ class manifestdict:
     def items(self):
         return (x[:2] for x in self._lm.iterentries())
 
-    iteritems = items
-
     def iterentries(self):
         return self._lm.iterentries()
 
@@ -277,7 +273,7 @@ class manifestdict:
                 start, end = _msearch(addbuf, f, start)
                 if not todelete:
                     h, fl = self._lm[f]
-                    l = encodeutf8("%s\0%s%s\n" % (f, revlog.hex(h), fl))
+                    l = ("%s\0%s%s\n" % (f, revlog.hex(h), fl)).encode()
                 else:
                     if start == end:
                         # item we want to delete was not found, error out
@@ -325,9 +321,9 @@ def _msearch(m, s, lo=0, hi=None):
 
     m should be a buffer, a memoryview or a byte string.
     s is str"""
-    assert not isinstance(m, unicode)
+    assert not isinstance(m, str)
     assert isinstance(s, str)
-    s = encodeutf8(s)
+    s = s.encode()
 
     def advance(i, c):
         while i < lenm and m[i : i + 1] != c:

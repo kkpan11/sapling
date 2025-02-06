@@ -12,6 +12,7 @@ rpmbin = rpm
 
 import ctypes
 import glob
+import io
 import json
 import os
 import socket
@@ -26,6 +27,7 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 import bindings
+
 from sapling import (
     bookmarks,
     color,
@@ -33,13 +35,11 @@ from sapling import (
     error,
     hintutil,
     progress,
-    pycompat,
     redact,
     registrar,
     util,
 )
 from sapling.i18n import _
-
 
 cmdtable = {}
 command = registrar.command(cmdtable)
@@ -56,8 +56,8 @@ BLACKBOX_PATTERN = """
 def shcmd(cmd, input=None, check: bool = True, keeperr: bool = True) -> str:
     _, _, _, p = util.popen4(cmd)
     out, err = p.communicate(input)
-    out = pycompat.decodeutf8(out, errors="replace")
-    err = pycompat.decodeutf8(err, errors="replace")
+    out = out.decode(errors="replace")
+    err = err.decode(errors="replace")
     if check and p.returncode:
         raise error.Abort(cmd + " error: " + err)
     elif keeperr:
@@ -67,7 +67,7 @@ def shcmd(cmd, input=None, check: bool = True, keeperr: bool = True) -> str:
 
 def which(name) -> Optional[str]:
     """ """
-    for p in encoding.environ.get("PATH", "/bin").split(pycompat.ospathsep):
+    for p in encoding.environ.get("PATH", "/bin").split(os.pathsep):
         path = os.path.join(p, name)
         if os.path.exists(path):
             return path
@@ -276,9 +276,7 @@ def readsigtraces(repo) -> str:
         # can produce very long but boring traces. Skip them.
         if "serve" in name:
             continue
-        content = pycompat.decodeutf8(
-            vfs.tryread("sigtrace/%s" % name), errors="replace"
-        )
+        content = vfs.tryread("sigtrace/%s" % name).decode(errors="replace")
         result += "%s:\n%s\n\n" % (name, content.strip())
     return result
 
@@ -334,8 +332,8 @@ def _makerage(ui, repo, **opts) -> str:
                 cmdargs += [f"--{flagname}={v}" for v in flagvalue]
             else:
                 cmdargs += [f"--{flagname}={flagvalue}"]
-        fin = util.stringio()
-        fout = ferr = util.stringio()
+        fin = io.BytesIO()
+        fout = ferr = io.BytesIO()
         status = bindings.commands.run(cmdargs, fin, fout, ferr)
 
         output = fout.getvalue().decode()
@@ -349,7 +347,7 @@ def _makerage(ui, repo, **opts) -> str:
         ("hostname", lambda: socket.gethostname()),
         ("repo location", lambda: repo.root),
         ("repo svfs location", lambda: repo.svfs.join("")),
-        ("cwd", lambda: pycompat.getcwd()),
+        ("cwd", lambda: os.getcwd()),
         ("fstype", lambda: util.getfstype(repo.root)),
         ("active bookmark", lambda: bookmarks._readactive(repo, repo._bookmarks)),
         (
@@ -370,7 +368,7 @@ def _makerage(ui, repo, **opts) -> str:
             lambda: shcmd(
                 (
                     "wmic LogicalDisk Where DriveType=3 Get DeviceId,FileSystem,FreeSpace,Size"
-                    if pycompat.iswindows
+                    if util.iswindows
                     else "df -h"
                 ),
                 check=False,
@@ -420,14 +418,14 @@ def _makerage(ui, repo, **opts) -> str:
             "uptime",
             lambda: shcmd(
                 "wmic path Win32_OperatingSystem get LastBootUpTime"
-                if pycompat.iswindows
+                if util.iswindows
                 else "uptime"
             ),
         ),
         ("watchman debug-status", lambda: shcmd("watchman debug-status", check=False)),
         ("rpm info", (partial(rpminfo, ui))),
         ("klist", lambda: shcmd("klist", check=False)),
-        ("ifconfig", lambda: shcmd("ipconfig" if pycompat.iswindows else "ifconfig")),
+        ("ifconfig", lambda: shcmd("ipconfig" if util.iswindows else "ifconfig")),
         (
             "airport",
             lambda: shcmd(
@@ -599,9 +597,9 @@ def rage(ui, repo, *pats, **opts) -> None:
                 stdout=subprocess.PIPE,
                 stdin=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                shell=pycompat.iswindows,
+                shell=util.iswindows,
             )
-            out, err = p.communicate(input=pycompat.encodeutf8(msg + "\n"))
+            out, err = p.communicate(input=(msg + "\n").encode())
             ret = p.returncode
         except OSError:
             ui.write(_("Failed calling pastry. (is it in your PATH?)\n"))
@@ -629,13 +627,13 @@ def rage(ui, repo, *pats, **opts) -> None:
         )
         ui.write(
             # pyre-fixme[61]: `out` is undefined, or not always defined.
-            "  " + pycompat.decodeutf8(out, errors="replace") + "\n",
+            "  " + out.decode(errors="replace") + "\n",
             label="rage.link",
         )
     ui.write(ui.config("rage", "advice", "") + "\n")
 
 
-if pycompat.iswindows:
+if util.iswindows:
     colortable = {"rage.link": "yellow bold"}
 else:
     colortable = {"rage.link": "blue bold"}

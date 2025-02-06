@@ -18,7 +18,6 @@ chrono = { version = "0.4", features = ["clock", "serde", "std"], default-featur
 connection_security_checker = { version = "0.1.0", path = "../../common/connection_security_checker" }
 context = { version = "0.1.0", path = "../context" }
 edenapi_service = { version = "0.1.0", path = "../../edenapi_service" }
-failure_ext = { version = "0.1.0", git = "https://github.com/facebookexperimental/rust-shed.git", branch = "main" }
 fbinit = { version = "0.2.0", git = "https://github.com/facebookexperimental/rust-shed.git", branch = "main" }
 futures = { version = "0.3.30", features = ["async-await", "compat"] }
 futures-util = "0.3.30"
@@ -31,12 +30,12 @@ http = "0.2"
 hyper = { version = "0.14.26", features = ["client", "http1", "http2", "stream"] }
 justknobs = { version = "0.1.0", git = "https://github.com/facebookexperimental/rust-shed.git", branch = "main" }
 lazy_static = "1.4"
-maplit = "1.0"
 metaconfig_types = { version = "0.1.0", path = "../../metaconfig/types" }
 metadata = { version = "0.1.0", path = "../metadata" }
 mononoke_api = { version = "0.1.0", path = "../../mononoke_api" }
 mononoke_app = { version = "0.1.0", path = "../../cmdlib/mononoke_app" }
 mononoke_configs = { version = "0.1.0", path = "../../mononoke_configs" }
+mononoke_macros = { version = "0.1.0", path = "../../mononoke_macros" }
 mononoke_types = { version = "0.1.0", path = "../../mononoke_types" }
 openssl = "0.10.63"
 percent-encoding = "2.1"
@@ -55,11 +54,9 @@ serde_json = { version = "1.0.132", features = ["float_roundtrip", "unbounded_de
 session_id = { version = "0.1.0", path = "../session_id" }
 sha1 = "0.10.5"
 slog = { version = "2.7", features = ["max_level_trace", "nested-values"] }
-slog-kvfilter = "0.7"
-slog-term = "2.8"
-slog_ext = { version = "0.1.0", path = "../../common/rust/slog_ext" }
 sshrelay = { version = "0.1.0", path = "../../sshrelay" }
 stats = { version = "0.1.0", git = "https://github.com/facebookexperimental/rust-shed.git", branch = "main" }
+textwrap = { version = "0.16.0", features = ["terminal_size"] }
 thiserror = "2"
 time_ext = { version = "0.1.0", git = "https://github.com/facebookexperimental/rust-shed.git", branch = "main" }
 tokio = { version = "1.41.0", features = ["full", "test-util", "tracing"] }

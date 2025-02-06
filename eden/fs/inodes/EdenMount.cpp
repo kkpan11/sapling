@@ -810,6 +810,18 @@ ImmediateFuture<SetPathObjectIdResultAndTimes> EdenMount::setPathsToObjectIds(
         checkoutMode,
         context->getClientPid(),
         "setPathObjectId",
+        getServerState()
+            ->getReloadableConfig()
+            ->getEdenConfig()
+            ->verifyFilesAfterCheckout.getValue(),
+        getServerState()
+            ->getReloadableConfig()
+            ->getEdenConfig()
+            ->verifyEveryNInvalidations.getValue(),
+        getServerState()
+            ->getReloadableConfig()
+            ->getEdenConfig()
+            ->maxNumberOfInvlidationsToVerify.getValue(),
         nullptr,
         context->getRequestInfo());
 
@@ -1427,6 +1439,18 @@ ImmediateFuture<CheckoutResult> EdenMount::checkout(
         checkoutMode,
         fetchContext->getClientPid(),
         thriftMethodCaller,
+        getServerState()
+            ->getReloadableConfig()
+            ->getEdenConfig()
+            ->verifyFilesAfterCheckout.getValue(),
+        getServerState()
+            ->getReloadableConfig()
+            ->getEdenConfig()
+            ->verifyEveryNInvalidations.getValue(),
+        getServerState()
+            ->getReloadableConfig()
+            ->getEdenConfig()
+            ->maxNumberOfInvlidationsToVerify.getValue(),
         progressTracker,
         fetchContext->getRequestInfo());
   }
@@ -1574,12 +1598,14 @@ ImmediateFuture<CheckoutResult> EdenMount::checkout(
            stopWatch,
            oldParent,
            snapshotHash,
-           journalDiffCallback](std::vector<CheckoutConflict>&& conflicts) {
+           journalDiffCallback](
+              CheckoutContext::CheckoutConflictsAndInvalidations&& conflicts) {
             checkoutTimes->didFinish = stopWatch.elapsed();
 
             CheckoutResult result;
             result.times = *checkoutTimes;
-            result.conflicts = std::move(conflicts);
+            result.conflicts = std::move(conflicts.conflicts);
+            result.sampleInodesToValidate = std::move(conflicts.invalidations);
             if (ctx->isDryRun()) {
               // This is a dry run, so all we need to do is tell the caller
               // about the conflicts: we should not modify any files or add

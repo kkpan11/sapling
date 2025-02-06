@@ -122,6 +122,10 @@ const styles = stylex.create({
   },
   commitTitle: {
     padding: 'var(--halfpad) var(--pad)',
+    transition: 'opacity 0.1s ease-out',
+  },
+  deemphasizeCommitTitle: {
+    opacity: 0.5,
   },
   inlineIcon: {
     verticalAlign: 'top',
@@ -143,6 +147,16 @@ const styles = stylex.create({
     fontSize: '90%',
     fontWeight: 'bold',
     marginBottom: 'var(--halfpad)',
+  },
+  fileHint: {
+    padding: 'var(--pad)',
+    outline: '1px solid var(--panel-view-border)',
+    background: 'var(--hint-background)',
+    display: 'flex',
+    gap: 'var(--halfpad)',
+  },
+  unmoveable: {
+    cursor: 'not-allowed',
   },
 });
 
@@ -287,12 +301,26 @@ function relevantSubset(stack: CommitStackState, dag: Dag) {
 
 // NOTE: To avoid re-render, the "renderCommit" and "renderCommitExtras" functions
 // need to be "static" instead of anonymous functions.
+// Note this is a regular function. To use React hooks, return a React component.
 function renderCommit(info: DagCommitInfo) {
+  return <RenderCommit info={info} />;
+}
+
+function RenderCommit(props: {info: DagCommitInfo}) {
+  const {info} = props;
+  const revs = useAtomValue(candidateDropTargetRevs);
+  const rev = info.stackRev;
+  const fadeout = revs != null && rev != null && revs.includes(rev) === false;
+
   if (info.phase === 'public') {
     return <div />;
   }
   // Just show the commit title for now.
-  return <div {...stylex.props(styles.commitTitle)}>{info.title}</div>;
+  return (
+    <div {...stylex.props(styles.commitTitle, fadeout && styles.deemphasizeCommitTitle)}>
+      {info.title}
+    </div>
+  );
 }
 
 function renderCommitExtras(info: DagCommitInfo) {
@@ -364,7 +392,12 @@ function AbsorbDagCommitExtras(props: {info: DagCommitInfo}) {
       )}
       {fileIdxToEdits
         .map((edits, fileIdx) => (
-          <AbsorbEditsForFile fileStackIndex={fileIdx} absorbEdits={edits} key={fileIdx} />
+          <AbsorbEditsForFile
+            isWdir={isWdir}
+            fileStackIndex={fileIdx}
+            absorbEdits={edits}
+            key={fileIdx}
+          />
         ))
         .valueSeq()}
     </div>
@@ -375,12 +408,13 @@ const absorbCollapsedFiles = atom<Map<string, boolean>>(new Map());
 
 function useCollapsedFile(
   path: string | undefined,
+  fileHasAnyDestinations: boolean,
 ): [boolean, (value: boolean) => void] | [undefined, undefined] {
   const collapsedFiles = useAtomValue(absorbCollapsedFiles);
   if (path == null) {
     return [undefined, undefined];
   }
-  const isCollapsed = collapsedFiles.get(path) || false;
+  const isCollapsed = collapsedFiles.get(path) ?? (fileHasAnyDestinations ? false : true);
   const setCollapsed = (collapsed: boolean) => {
     const newMap = new Map(collapsedFiles);
     newMap.set(path, collapsed);
@@ -395,6 +429,7 @@ function useResetCollapsedFilesOnMount() {
 }
 
 function AbsorbEditsForFile(props: {
+  isWdir: boolean;
   fileStackIndex: FileStackIndex;
   absorbEdits: ImMap<AbsorbEditId, AbsorbEdit>;
 }) {
@@ -411,7 +446,15 @@ function AbsorbEditsForFile(props: {
   const pathInWorkingCopy = stack.getFileStackPath(fileStackIndex, wdirRev);
   const path = pathInWorkingCopy ?? pathInCommit;
 
-  const [isCollapsed, setCollapsed] = useCollapsedFile(path);
+  const fileHasAnyDestinations = !props.isWdir
+    ? true
+    : absorbEdits.some(edit => {
+        const absorbEditId = edit.absorbEditId;
+        const dests = stack?.getAbsorbCommitRevs(fileStackIndex, absorbEditId);
+        return dests != null && dests.candidateRevs.length > 1;
+      });
+
+  const [isCollapsed, setCollapsed] = useCollapsedFile(path, fileHasAnyDestinations);
 
   return (
     <div>
@@ -428,11 +471,23 @@ function AbsorbEditsForFile(props: {
           iconType={IconType.Modified}
         />
       )}
+      {fileHasAnyDestinations === false && !isCollapsed ? (
+        <div {...stylex.props(styles.fileHint)}>
+          <Icon icon="warning" />
+          <T>This file was not changed in this stack and can't be absorbed</T>
+        </div>
+      ) : null}
       {
         // Edits are rendered even when collapsed, so the reordering id animation doesn't trigger when collapsing.
         props.absorbEdits
           .map((edit, i) => (
-            <SingleAbsorbEdit collapsed={isCollapsed} path={path} edit={edit} key={i} />
+            <SingleAbsorbEdit
+              collapsed={isCollapsed}
+              path={path}
+              edit={edit}
+              key={i}
+              unmovable={fileHasAnyDestinations === false}
+            />
           ))
           .valueSeq()
       }
@@ -445,8 +500,9 @@ function SingleAbsorbEdit(props: {
   edit: AbsorbEdit;
   inDraggingOverlay?: boolean;
   path?: string;
+  unmovable?: boolean;
 }) {
-  const {edit, inDraggingOverlay, path} = props;
+  const {edit, inDraggingOverlay, path, unmovable} = props;
   const isDragging = useAtomValue(draggingAbsorbEdit);
   const stackEdit = useStackEditState();
   const reorderId = `absorb-${edit.fileStackIndex}-${edit.absorbEditId}`;
@@ -478,6 +534,7 @@ function SingleAbsorbEdit(props: {
           // So `push` can work like `replaceTopOperation` while dragging.
           stackEdit.push(newStack, {name: 'absorbMove', commit});
         } catch {
+          // This should be unreachable.
           newDraggingHint = t(
             'Diff chunk can only be applied to a commit that modifies the file and has matching context lines.',
           );
@@ -534,10 +591,12 @@ function SingleAbsorbEdit(props: {
       {props.collapsed ? null : (
         <>
           <div {...stylex.props(styles.dragHandlerWrapper)}>
-            <DragHandle onDrag={handleDrag} xstyle={styles.dragHandle}>
+            <DragHandle
+              onDrag={unmovable ? undefined : handleDrag}
+              xstyle={[styles.dragHandle, unmovable ? styles.unmoveable : undefined]}>
               <Icon icon="grabber" />
             </DragHandle>
-            {!inDraggingOverlay && <SendToCommitButton edit={edit} />}
+            {!inDraggingOverlay && !unmovable && <SendToCommitButton edit={edit} />}
           </div>
           <SplitDiffTable ctx={ctx} path={path ?? ''} patch={patch} />
         </>

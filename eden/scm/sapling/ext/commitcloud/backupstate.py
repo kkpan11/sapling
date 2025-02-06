@@ -9,7 +9,7 @@ import contextlib
 import os
 
 from sapling import error, node as nodemod, util
-from sapling.pycompat import encodeutf8
+
 
 FORMAT_VERSION = "v2"
 
@@ -83,9 +83,9 @@ class BackupState:
         return set(unfi.nodes("not public() & ::%ln", self.heads))
 
     def _write(self, f):
-        f.write(encodeutf8("%s\n" % FORMAT_VERSION))
+        f.write(("%s\n" % FORMAT_VERSION).encode())
         for h in self.heads:
-            f.write(encodeutf8("%s\n" % nodemod.hex(h)))
+            f.write(("%s\n" % nodemod.hex(h)).encode())
 
     def update(self, newnodes, tr=None):
         unfi = self.repo

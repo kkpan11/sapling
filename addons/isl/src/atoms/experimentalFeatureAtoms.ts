@@ -22,6 +22,12 @@ const localExperimentalFeatures = localStorageBackedAtom<number>(
 );
 
 /**
+ * List of all currently enabled experimental features, as UI labels.
+ * UI setting to enable experimental features is only shown if this list is non-empty.
+ */
+export const currentExperimentalFeaturesList: Array<string> = [];
+
+/**
  * Whether experimental features are enabled.
  * Backed by a remote config by default. Can also be set locally.
  */

@@ -113,11 +113,9 @@ from typing import Dict
 
 from sapling.util import sortdict
 
-from . import error, perftrace, pycompat, smartset, txnutil, util, visibility
+from . import error, perftrace, smartset, txnutil, util, visibility
 from .i18n import _
 from .node import bbin, bin, hex, nullid, nullrev, short
-from .pycompat import encodeutf8, range
-
 
 _fphasesentry = struct.Struct(">i20s")
 
@@ -304,13 +302,13 @@ class phasecache:
         assert not self._headbased
         cl = repo.changelog
         self._phasesets = [set() for phase in allphases]
-        roots = pycompat.maplist(cl.rev, self.phaseroots[secret])
+        roots = list(map(cl.rev, self.phaseroots[secret]))
         if roots:
             ps = set(cl.descendants(roots))
             for root in roots:
                 ps.add(root)
             self._phasesets[secret] = ps
-        roots = pycompat.maplist(cl.rev, self.phaseroots[draft])
+        roots = list(map(cl.rev, self.phaseroots[draft]))
         if roots:
             ps = set(cl.descendants(roots))
             for root in roots:
@@ -409,7 +407,7 @@ class phasecache:
         assert not self._headbased
         for phase, roots in enumerate(self.phaseroots):
             for h in roots:
-                fp.write(encodeutf8("%i %s\n" % (phase, hex(h))))
+                fp.write(("%i %s\n" % (phase, hex(h))).encode())
         self.dirty = False
 
     def _updateroots(self, phase, newroots, tr):

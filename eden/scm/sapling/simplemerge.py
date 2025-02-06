@@ -31,9 +31,8 @@ from typing import List, Optional, Tuple
 
 from bindings import clientinfo
 
-from . import error, match, mdiff, pycompat, util
+from . import error, match, mdiff, util
 from .i18n import _
-from .pycompat import range
 
 _DEFAULT_CACHE_SIZE = 10000
 _automerge_cache = util.lrucachedict(_DEFAULT_CACHE_SIZE)
@@ -910,7 +909,7 @@ def _picklabels(overrides):
         raise error.Abort(_("can only specify three labels."))
     result = [None, None, None]
     for i, override in enumerate(overrides):
-        result[i] = pycompat.encodeutf8(override)
+        result[i] = override.encode()
     return result
 
 

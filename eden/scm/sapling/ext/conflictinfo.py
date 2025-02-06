@@ -36,7 +36,6 @@ from sapling import (
     error,
     extensions,
     merge as mergemod,
-    pycompat,
     scmutil,
     util,
 )
@@ -44,7 +43,6 @@ from sapling.filemerge import absentfilectx
 from sapling.i18n import _
 from sapling.node import bin
 from sapling.simplemerge import Merge3Text, render_merge3
-
 
 testedwith = "ships-with-fb-ext"
 
@@ -228,7 +226,7 @@ def _summarizepathconflicts(self, path) -> Optional[Dict[str, Any]]:
 
 def _decodeutf8ornone(data):
     try:
-        return pycompat.decodeutf8(data)
+        return data.decode()
     except UnicodeDecodeError:
         return None
 

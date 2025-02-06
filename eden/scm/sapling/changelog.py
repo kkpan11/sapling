@@ -21,9 +21,7 @@ import bindings
 from . import encoding, error, revlog, util
 from .i18n import _
 from .node import bbin, hex, nullid
-from .pycompat import decodeutf8, encodeutf8, iteritems
 from .thirdparty import attr
-
 
 _defaultextra = {"branch": "default"}
 
@@ -69,7 +67,7 @@ def decodeextra(text: bytes) -> "Dict[str, str]":
 
 
 def encodeextra(d):
-    for k, v in iteritems(d):
+    for k, v in d.items():
         if not isinstance(v, str):
             raise ValueError("extra '%s' should be type str not %s" % (k, v.__class__))
 
@@ -148,7 +146,7 @@ class changelogrevision:
     @property
     def user(self):
         off = self._offsets
-        return encoding.tolocalstr(self._text[off[0] + 1 : off[1]])
+        return self._text[off[0] + 1 : off[1]].decode()
 
     @property
     def _rawdate(self):
@@ -195,12 +193,12 @@ class changelogrevision:
         if off[2] == off[3]:
             self._files = tuple()
         else:
-            self._files = tuple(decodeutf8(self._text[off[2] + 1 : off[3]]).split("\n"))
+            self._files = tuple(self._text[off[2] + 1 : off[3]].decode().split("\n"))
         return self._files
 
     @property
     def description(self):
-        return encoding.tolocalstr(self._text[self._offsets[3] + 2 :])
+        return self._text[self._offsets[3] + 2 :].decode()
 
 
 class changelogrevision2:
@@ -258,10 +256,6 @@ class changelogrevision2:
 
 def hgcommittext(manifest, files, desc, user, date, extra, use_rust=True):
     """Generate the 'text' of a commit"""
-    # Convert to UTF-8 encoded bytestrings as the very first
-    # thing: calling any method on a localstr object will turn it
-    # into a str object and the cached UTF-8 string is thus lost.
-    user, desc = encoding.fromlocal(user), encoding.fromlocal(desc)
 
     user = user.strip()
     # An empty username or a username with a "\n" will make the
@@ -303,7 +297,7 @@ def hgcommittext(manifest, files, desc, user, date, extra, use_rust=True):
             extra = encodeextra(extra)
             parseddate = "%s %s" % (parseddate, extra)
         l = [hex(manifest), user, parseddate] + sorted(files) + ["", desc]
-        text = encodeutf8("\n".join(l), errors="surrogateescape")
+        text = "\n".join(l).encode(errors="surrogateescape")
     return text
 
 

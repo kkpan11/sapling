@@ -68,7 +68,6 @@ import bindings
 
 from . import error, util
 from .i18n import _
-from .pycompat import encodeutf8
 
 parsers = bindings.cext.parsers
 
@@ -162,8 +161,8 @@ def _fm1encodeonemarker(marker):
     data[0] = totalsize
     data = [_pack(format, *data)]
     for key, value in metadata:
-        key = encodeutf8(key)
-        value = encodeutf8(value)
+        key = key.encode()
+        value = value.encode()
         data.append(key)
         data.append(value)
     return b"".join(data)
@@ -180,7 +179,6 @@ def _readmarkerversion(data):
     return _unpack(">B", data[0:1])[0]
 
 
-@util.nogc
 def _readmarkers(data, off=None, stop=None):
     """Read and enumerate markers from raw data"""
     diskversion = _readmarkerversion(data)

@@ -30,6 +30,7 @@ use gotham_ext::response::StreamBody;
 use gotham_ext::response::TryIntoResponse;
 use hyper::Body;
 use hyper::Response;
+use mononoke_macros::mononoke;
 use mononoke_types::ChangesetId;
 use packetline::encode::delim_to_write;
 use packetline::encode::flush_to_write;
@@ -373,6 +374,7 @@ pub async fn fetch(
     args: FetchArgs,
 ) -> Result<impl TryIntoResponse, Error> {
     let (writer, reader) = mpsc::channel::<Bytes>(100_000_000);
+    let (progress_writer, mut progress_reader) = mpsc::channel::<String>(50);
     let sink_writer = SinkWriter::new(CopyToBytes::new(
         PollSender::new(writer).sink_map_err(|_| std::io::Error::from(ErrorKind::BrokenPipe)),
     ));
@@ -380,6 +382,11 @@ pub async fn fetch(
         FetchResponseHeaders::from_request(request_context.clone(), args.clone()).await?;
     let include_pack = fetch_response_headers.include_pack();
     let shallow_response = fetch_response_headers.shallow_response.take();
+    let delta_form = if request_context.pushvars.use_only_offset_delta() {
+        DeltaForm::OnlyOffset
+    } else {
+        DeltaForm::RefAndOffset
+    };
 
     // Some repos might be configured to display a message to users when they
     // run `git pull`.
@@ -396,6 +403,11 @@ pub async fn fetch(
                 write_progress_channel(fetch_msg.as_ref(), &mut buf).await?;
                 yield Bytes::from(buf);
             }
+            while let Some(progress) = progress_reader.recv().await {
+                let mut buf = Vec::with_capacity(progress.len());
+                write_progress_channel(progress.as_ref(), &mut buf).await?;
+                yield Bytes::from(buf);
+            }
             while let Some(chunks) = pack_reader.next().await {
                 for chunk in chunks {
                     let mut buf = Vec::with_capacity(chunk.len());
@@ -410,20 +422,26 @@ pub async fn fetch(
         yield Bytes::from(buf);
     })
     .end_on_err::<anyhow::Error>();
-    tokio::spawn({
+    mononoke::spawn_task({
         let request_context = request_context.clone();
         async move {
+            if delta_form == DeltaForm::OnlyOffset {
+                progress_writer
+                    .send("Packfile will be created using only offset deltas\n".to_string())
+                    .await?;
+            }
             let response_stream = fetch_response(
                 request_context.ctx.clone(),
                 &request_context.repo,
                 args.into_request(concurrency(&request_context), shallow_response),
+                progress_writer,
             )
             .await?;
             let mut pack_writer = PackfileWriter::new(
                 sink_writer,
                 response_stream.num_items as u32,
                 5000,
-                DeltaForm::RefAndOffset,
+                delta_form,
             );
             pack_writer.write(response_stream.items).await?;
             pack_writer.finish().await?;

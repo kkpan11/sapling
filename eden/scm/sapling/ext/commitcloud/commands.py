@@ -18,7 +18,6 @@ from sapling import (
     lock as lockmod,
     node as nodemod,
     progress,
-    pycompat,
     registrar,
     scmutil,
     util,
@@ -248,9 +247,14 @@ def cloudjoin(ui, repo, **opts):
                 % (currentworkspace, workspacename),
                 component="commitcloud",
             )
-            with backuplock.lock(repo), repo.wlock(), repo.lock(), repo.transaction(
-                "commit cloud switch workspace clean up transaction"
-            ) as tr:
+            with (
+                backuplock.lock(repo),
+                repo.wlock(),
+                repo.lock(),
+                repo.transaction(
+                    "commit cloud switch workspace clean up transaction"
+                ) as tr,
+            ):
                 # check that the current location is a public commit
                 if repo["."].mutable():
                     # * get the public root of the current commit
@@ -1519,7 +1523,7 @@ def cloudstatus(ui, repo, **opts):
     ui.write(_("Last Sync Time: %s\n") % time.ctime(state.lastupdatetime))
 
     if repo.svfs.isfile(sync._syncstatusfile):
-        status = pycompat.decodeutf8(repo.svfs.read(sync._syncstatusfile))
+        status = repo.svfs.read(sync._syncstatusfile).decode()
     else:
         status = "Not logged"
     ui.write(_("Last Sync Status: %s\n") % status)

@@ -6,6 +6,7 @@
 # wirepack.py - wireprotocol for exchanging packs
 from __future__ import absolute_import
 
+import io
 import struct
 import time
 from typing import (
@@ -21,10 +22,9 @@ from typing import (
     TYPE_CHECKING,
 )
 
-from sapling import perftrace, progress, pycompat
+from sapling import perftrace, progress
 from sapling.i18n import _
 from sapling.node import hex, nullid
-from sapling.pycompat import range
 
 from . import constants
 from .mutablestores import mutabledatastore, mutablehistorystore
@@ -58,7 +58,7 @@ def sendpackpart(
                <delta len: 8 byte unsigned int>
                <delta>
     """
-    rawfilename = pycompat.encodeutf8(filename)
+    rawfilename = filename.encode()
     rawfilenamelen = struct.pack(constants.FILENAMESTRUCT, len(rawfilename))
     yield b"%s%s" % (rawfilenamelen, rawfilename)
 
@@ -66,7 +66,7 @@ def sendpackpart(
     historylen = struct.pack("!I", len(history))
     rawhistory = []
     for entry in history:
-        copyfrom = pycompat.encodeutf8(entry[4] or "")
+        copyfrom = (entry[4] or "").encode()
         copyfromlen = len(copyfrom)
         tup = entry[:-1] + (copyfromlen,)
         rawhistory.append(struct.pack("!20s20s20s20sH", *tup))
@@ -157,7 +157,7 @@ def readhistory(
     for i in range(count):
         entry = readunpack(fh, "!20s20s20s20sH")
         if entry[4] != 0:
-            copyfrom = pycompat.decodeutf8(readexactly(fh, entry[4]))
+            copyfrom = readexactly(fh, entry[4]).decode()
         else:
             copyfrom = ""
         entry = entry[:4] + (copyfrom,)
@@ -185,7 +185,7 @@ class wirepackstore:
     def __init__(self, wirepack, version=1):
         self._data = {}
         self._history = {}
-        fh = pycompat.stringio(wirepack)
+        fh = io.BytesIO(wirepack)
         self._load(fh, version)
 
     def __iter__(self):
@@ -198,15 +198,6 @@ class wirepackstore:
     def getdeltachain(self, name, node):
         delta, deltabase, metadata = self._data[(name, node)]
         return [(name, node, name, deltabase, delta)]
-
-    def getmeta(self, name, node):
-        try:
-            delta, deltabase, metadata = self._data[(name, node)]
-            if metadata is not None:
-                return metadata
-        except KeyError:
-            raise KeyError((name, hex(node)))
-        return {constants.METAKEYFLAG: "", constants.METAKEYSIZE: len(delta)}
 
     def getnodeinfo(self, name, node):
         try:

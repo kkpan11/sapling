@@ -35,8 +35,7 @@
 # Start up the Mononoke Git Service
   $ mononoke_git_service
 # Clone the Git repo from Mononoke
-  $ git_client clone $MONONOKE_GIT_SERVICE_BASE_URL/$REPONAME.git
-  Cloning into 'repo'...
+  $ quiet git_client clone $MONONOKE_GIT_SERVICE_BASE_URL/$REPONAME.git
 
 # A single Git clone involves three requests to the Git server. Check if we
 # have 3 scuba records corresponding to the request
@@ -61,3 +60,15 @@
     "poll_time_us": *, (glob)
     "poll_count": *, (glob)
     "poll_time_us": *, (glob)
+
+# Verify the method variants in scuba as a normvector
+  $ jq .normvector.method_variants "$SCUBA"
+  [
+    "standard"
+  ]
+  [
+    "standard"
+  ]
+  [
+    "standard"
+  ]

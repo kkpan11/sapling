@@ -28,12 +28,11 @@ from typing import IO, Optional, Tuple, Union
 
 import bindings
 
-from . import ancestor, error, mdiff, pycompat, templatefilters, util
+from . import ancestor, error, mdiff, templatefilters, util
 from .i18n import _
 
 # import stuff from node for others to import from revlog
 from .node import bbin, bhex, nullid, nullrev, wdirid, wdirrev
-from .pycompat import range
 
 parsers = bindings.cext.parsers
 
@@ -694,7 +693,7 @@ class revlog:
             ancs = self.index.commonancestorsheads(a, b)
         except (AttributeError, OverflowError):  # C implementation failed
             ancs = ancestor.commonancestorsheads(self.parentrevs, a, b)
-        return pycompat.maplist(self.node, ancs)
+        return list(map(self.node, ancs))
 
     def _match(self, id):
         if isinstance(id, int):
@@ -1115,8 +1114,7 @@ class revlog:
             if revornode is None:
                 revornode = templatefilters.short(bhex(node))
             raise RevlogError(
-                _("integrity check failed on %s:%s")
-                % (self.indexfile, pycompat.bytestr(revornode))
+                _("integrity check failed on %s:%s") % (self.indexfile, str(revornode))
             )
 
     def checkinlinesize(self, tr, fp=None):

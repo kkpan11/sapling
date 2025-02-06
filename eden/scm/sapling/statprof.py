@@ -121,8 +121,7 @@ import tempfile
 import threading
 import time
 
-from . import encoding, pycompat, util
-
+from . import encoding, util
 
 defaultdict = collections.defaultdict
 contextmanager = contextlib.contextmanager
@@ -450,7 +449,7 @@ class SiteStats:
                 if i == 0:
                     sitestat.addself()
 
-        return [s for s in pycompat.itervalues(stats)]
+        return [s for s in stats.values()]
 
 
 class DisplayFormats:
@@ -711,9 +710,7 @@ def display_hotpath(data, fp, limit=0.05, **kwargs):
     def _write(node, depth, multiple_siblings):
         site = node.site
         visiblechildren = [
-            c
-            for c in pycompat.itervalues(node.children)
-            if c.count >= (limit * root.count)
+            c for c in node.children.values() if c.count >= (limit * root.count)
         ]
         if site:
             indent = depth * 2 - 1
@@ -739,7 +736,7 @@ def display_hotpath(data, fp, limit=0.05, **kwargs):
             codestring = codepattern % ("line", site.lineno, site.getsource(30))
 
             finalstring = liststring + codestring
-            childrensamples = sum([c.count for c in pycompat.itervalues(node.children)])
+            childrensamples = sum([c.count for c in node.children.values()])
             # Make frames that performed more than 10% of the operation red
             if node.count - childrensamples > (0.1 * root.count):
                 finalstring = redformat % finalstring
@@ -991,7 +988,7 @@ def main(argv=None):
 
     # process options
     try:
-        opts, args = pycompat.getoptb(
+        opts, args = getopt.getopt(
             sys.argv[optstart:],
             "hl:f:o:p:",
             ["help", "limit=", "file=", "output-file=", "script-path="],

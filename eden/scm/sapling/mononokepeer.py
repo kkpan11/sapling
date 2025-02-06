@@ -44,7 +44,6 @@ from bindings import cats, clientinfo, zstd
 
 from . import error, httpconnection, progress, sslutil, stdiopeer, url, util
 from .i18n import _
-from .pycompat import decodeutf8, encodeutf8, iswindows
 from .thirdparty.pysocks import socks
 
 # Netencoding special characters
@@ -187,7 +186,7 @@ class mononokepipe:
 
         iostream = pack("b", IoStream.STDIN.value)
         netstringlength = len(data) + 1
-        netstringprefix = encodeutf8(str(netstringlength)) + NETSTRING_SEPARATOR
+        netstringprefix = str(netstringlength).encode() + NETSTRING_SEPARATOR
 
         self._pipe.write(netstringprefix)
         self._pipe.write(iostream)
@@ -280,9 +279,11 @@ class mononokepeer(stdiopeer.stdiopeer):
                 error.RepoError(_("creating repositories in Mononoke is not supported"))
             )
 
-        with self.ui.timeblockedsection(
-            "mononokesetup"
-        ), progress.suspend(), util.traced("mononoke_setup", cat="blocked"):
+        with (
+            self.ui.timeblockedsection("mononokesetup"),
+            progress.suspend(),
+            util.traced("mononoke_setup", cat="blocked"),
+        ):
             self._validaterepo()
 
     def _connectionerror(self, ex, tlserror=False):
@@ -359,7 +360,7 @@ class mononokepeer(stdiopeer.stdiopeer):
 
         with self.ui.timeblockedsection("mononoke_headers"):
             try:
-                requestline = encodeutf8("GET /{} HTTP/1.1\r\n".format(self._path))
+                requestline = "GET /{} HTTP/1.1\r\n".format(self._path).encode()
                 proxy = (
                     "+proxied"
                     if self._unix_socket_proxy or self._auth_proxy_http
@@ -388,7 +389,7 @@ class mononokepeer(stdiopeer.stdiopeer):
                     headers.update(json.loads(self._confheaders))
 
                 headersstr = b"\r\n".join(
-                    map(lambda x: encodeutf8(x[0] + ": " + x[1]), headers.items())
+                    map(lambda x: (x[0] + ": " + x[1]).encode(), headers.items())
                 )
 
                 httprequest = requestline + headersstr + b"\r\n\r\n"
@@ -398,7 +399,7 @@ class mononokepeer(stdiopeer.stdiopeer):
 
                 self.sock.send(httprequest)
 
-                if iswindows:
+                if util.iswindows:
                     self.handle = socket.socket.makefile(self.sock, mode="rwb")
                 else:
                     # Read HTTP response headers so we can start our own
@@ -420,7 +421,7 @@ class mononokepeer(stdiopeer.stdiopeer):
                 if headerparts[0] != b"HTTP/1.1":
                     self._abort(
                         error.BadResponseError(
-                            'unexpected server response: "{}"'.format(decodeutf8(line))
+                            'unexpected server response: "{}"'.format(line.decode())
                         )
                     )
 
@@ -452,8 +453,8 @@ class mononokepeer(stdiopeer.stdiopeer):
                     bodyerrmsg = self.handle.read(bodylength)
                     x2pagentderr = (
                         "x2pagentd: {}. {}".format(
-                            decodeutf8(x2pagentderrortype),
-                            decodeutf8(x2pagentderrormsg),
+                            x2pagentderrortype.decode(),
+                            x2pagentderrormsg.decode(),
                         )
                         if x2pagentderrortype
                         else ""
@@ -461,10 +462,10 @@ class mononokepeer(stdiopeer.stdiopeer):
                     self._abort(
                         error.BadResponseError(
                             'unexpected server response: "{} {}": {}\n{}\n{}'.format(
-                                decodeutf8(httpcode),
-                                decodeutf8(httpstatus),
-                                decodeutf8(bodyerrmsg),
-                                decodeutf8(apeadvice),
+                                httpcode.decode(),
+                                httpstatus.decode(),
+                                bodyerrmsg.decode(),
+                                apeadvice.decode(),
                                 x2pagentderr,
                             )
                         )
@@ -491,7 +492,7 @@ class mononokepeer(stdiopeer.stdiopeer):
                 reader.readline()
 
                 # actual capabilities, which we should parse
-                l = decodeutf8(reader.readline())
+                l = reader.readline().decode()
                 if not l.startswith("capabilities:"):
                     self._abort(
                         error.BadResponseError("no capabilities advertised by mononoke")

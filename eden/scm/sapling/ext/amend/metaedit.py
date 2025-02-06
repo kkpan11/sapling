@@ -20,14 +20,12 @@ from typing import Optional
 from sapling import (
     cmdutil,
     commands,
-    encoding,
     error,
     hg,
     identity,
     json,
     node as nodemod,
     phases,
-    pycompat,
     registrar,
     scmutil,
     util,
@@ -36,7 +34,6 @@ from sapling.i18n import _
 from sapling.node import bin
 
 from . import common, fold
-
 
 cmdtable = {}
 command = registrar.command(cmdtable)
@@ -208,16 +205,14 @@ def metaedit(ui, repo, templ, *revs, **opts) -> Optional[int]:
                     if jsoninputfile:
                         try:
                             if cmdutil.isstdiofilename(jsoninputfile):
-                                inputjson = pycompat.decodeutf8(ui.fin.read())
+                                inputjson = ui.fin.read().decode()
                             else:
-                                inputjson = pycompat.decodeutf8(
-                                    util.readfile(jsoninputfile)
-                                )
+                                inputjson = util.readfile(jsoninputfile).decode()
                             msgusermap = json.loads(inputjson)
                         except IOError as inst:
                             raise error.Abort(
                                 _("can't read JSON input file '%s': %s")
-                                % (jsoninputfile, encoding.strtolocal(inst.strerror))
+                                % (jsoninputfile, inst.strerror)
                             )
                         except ValueError as inst:
                             raise error.Abort(

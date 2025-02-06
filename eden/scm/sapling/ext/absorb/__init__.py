@@ -27,8 +27,8 @@ amend modified chunks into the corresponding non-public changesets.
 from __future__ import absolute_import
 
 import bisect
-
 import collections
+import io
 
 import bindings
 
@@ -44,15 +44,11 @@ from sapling import (
     mutation,
     node,
     patch,
-    phases,
-    pycompat,
     registrar,
     scmutil,
     util,
 )
 from sapling.i18n import _, _n
-from sapling.pycompat import decodeutf8, encodeutf8, range
-
 
 testedwith = "ships-with-fb-ext"
 
@@ -464,7 +460,7 @@ class filefixupstate:
             l = tuple(info[:2])
             editortext += "    %s : %s" % (
                 "".join([("y" if i in lineset[l] else " ") for i, _f in visiblefctxs]),
-                decodeutf8(self._getline(l)),
+                self._getline(l).decode(),
             )
         # run editor
         editedtext = self.ui.edit(editortext, "", action="absorb")
@@ -479,7 +475,7 @@ class filefixupstate:
                 continue
             if l[colonpos - 1 : colonpos + 2] != " : ":
                 raise error.Abort(_("malformed line: %s") % l)
-            linecontent = encodeutf8(l[colonpos + 2 :])
+            linecontent = l[colonpos + 2 :].encode()
             for i, ch in enumerate(l[leftpadpos : colonpos - 1]):
                 if ch == "y":
                     contents[visiblefctxs[i][0]] += linecontent
@@ -799,7 +795,7 @@ class fixupstate:
                 return False
             pctx = parents[0]
         # ctx changes more files (not a subset of memworkingcopy)
-        if not set(ctx.files()).issubset(set(pycompat.iterkeys(memworkingcopy))):
+        if not set(ctx.files()).issubset(set(memworkingcopy.keys())):
             return False
         for path, content in memworkingcopy.items():
             if path not in pctx or path not in ctx:
@@ -845,7 +841,7 @@ def _parsechunk(hunk):
     a1 = hunk.fromline + len(hunk.before) - 1
     # remove before and after context
     hunk.before = hunk.after = []
-    buf = util.stringio()
+    buf = io.BytesIO()
     hunk.write(buf)
     patchlines = mdiff.splitnewlines(buf.getvalue())
     # hunk.prettystr() will update hunk.removed

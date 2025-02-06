@@ -232,6 +232,7 @@ const PYTHON_CANDIDATES: &[&str] = &[
     r"c:\Python310",
 ];
 
+// T214515756
 #[cfg(windows)]
 pub fn find_python() -> Option<PathBuf> {
     for candidate in PYTHON_CANDIDATES.iter() {

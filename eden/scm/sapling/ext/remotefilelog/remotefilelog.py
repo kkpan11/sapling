@@ -12,10 +12,9 @@ import os
 
 from bindings import revisionstore
 
-from sapling import ancestor, error, filelog, mdiff, pycompat, revlog, util
+from sapling import ancestor, error, filelog, mdiff, revlog, util
 from sapling.i18n import _
 from sapling.node import bin, hex, nullid
-from sapling.pycompat import isint
 
 from . import constants, shallowutil
 
@@ -182,8 +181,7 @@ class remotefilelog:
 
         dpack, hpack = self.repo.fileslog.getmutablelocalpacks()
 
-        dpackmeta = {constants.METAKEYFLAG: flags}
-        dpack.add(self.filename, node, revlog.nullid, rawtext, metadata=dpackmeta)
+        dpack.add(self.filename, node, revlog.nullid, rawtext)
 
         copyfrom = ""
         realp1node = p1
@@ -272,14 +270,7 @@ class remotefilelog:
         return False
 
     def flags(self, node):
-        if isint(node):
-            raise error.ProgrammingError(
-                "remotefilelog does not accept integer rev for flags"
-            )
-        if node == nullid:
-            return revlog.REVIDX_DEFAULT_FLAGS
-        store = self.repo.fileslog.filestore
-        return store.getmeta(self.filename, node).get(constants.METAKEYFLAG, 0)
+        return 0
 
     def parents(self, node):
         if node == nullid:
@@ -314,7 +305,7 @@ class remotefilelog:
 
     def node(self, rev):
         # This is a hack.
-        if isint(rev):
+        if isinstance(rev, int):
             raise error.ProgrammingError(
                 "remotefilelog does not convert integer rev to node"
             )
@@ -487,7 +478,7 @@ class remotefilelog:
         parentrevs = collections.defaultdict(list)
         revmap = {}
         queue = collections.deque(
-            ((None, n) for n in pycompat.iterkeys(parentsmap) if n not in allparents)
+            ((None, n) for n in parentsmap.keys() if n not in allparents)
         )
         while queue:
             prevrev, current = queue.pop()

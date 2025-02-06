@@ -13,18 +13,18 @@
 
 from __future__ import absolute_import
 
+import io
 import shlex
 import sys
 import time
 from typing import Any, Dict, List, Optional
 
 import bindings
-import sapling
 
-from sapling import ext, hgdemandimport, pycompat, registrar, traceimport, util
+import sapling
+from sapling import ext, hgdemandimport, registrar, traceimport, util
 from sapling.ext import commitcloud as cc
 from sapling.i18n import _
-
 
 cmdtable = {}
 command = registrar.command(cmdtable)
@@ -91,7 +91,7 @@ def debugshell(ui, repo, *args, **opts):
     env = globals()
     env["ui"] = ui
     _assignobjects(env, repo)
-    sys.argv = pycompat.sysargv = args
+    sys.argv = args
 
     if command:
         exec(command, env, env)
@@ -218,8 +218,8 @@ def c(args: List[str]) -> bytes:
     if isinstance(args, str):
         args = shlex.split(args)
     ui = globals()["ui"]
-    fin = util.stringio()
-    fout = util.stringio()
+    fin = io.BytesIO()
+    fout = io.BytesIO()
     bindings.commands.run(["hg"] + args, fin, fout, ui.ferr)
     return fout.getvalue()
 

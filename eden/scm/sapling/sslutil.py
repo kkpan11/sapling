@@ -18,11 +18,11 @@ import hashlib
 import os
 import re
 import ssl
+import sys
 from typing import Any, Dict, Optional, Tuple
 
-from . import error, pycompat, util
+from . import error, util
 from .i18n import _
-
 
 # Python 2.7.9+ overhauled the built-in SSL/TLS features of Python. It added
 # support for TLS 1.1, TLS 1.2, SNI, system CA stores, etc. These features are
@@ -352,7 +352,7 @@ def protocolsettings(protocol: str) -> Tuple[ssl._SSLMethod, int, str]:
     return ssl.PROTOCOL_SSLv23, options, protocol
 
 
-def wrapsocket(sock, keyfile, certfile, ui, serverhostname=None):
+def wrapsocket(sock, keyfile, certfile, ui, serverhostname):
     """Add SSL/TLS to a socket.
 
     This is a glorified wrapper for ``ssl.wrap_socket()``. It makes sane
@@ -376,7 +376,7 @@ def wrapsocket(sock, keyfile, certfile, ui, serverhostname=None):
                 hint=_("restore missing file or fix references in @Product@ config"),
             )
 
-    settings = _hostsettings(ui, pycompat.ensurestr(serverhostname))
+    settings = _hostsettings(ui, _ensurestr(serverhostname))
 
     # We can't use ssl.create_default_context() because it calls
     # load_default_certs() unless CA arguments are passed to it. We want to
@@ -414,7 +414,7 @@ def wrapsocket(sock, keyfile, certfile, ui, serverhostname=None):
         try:
             sslcontext.load_verify_locations(cafile=settings["cafile"])
         except ssl.SSLError as e:
-            if len(e.args) == 1:  # pypy has different SSLError args
+            if len(e.args) == 1:
                 msg = e.args[0]
             else:
                 msg = e.args[1]
@@ -530,7 +530,7 @@ def wrapsocket(sock, keyfile, certfile, ui, serverhostname=None):
                         )
                     )
 
-            elif e.reason == "CERTIFICATE_VERIFY_FAILED" and pycompat.iswindows:
+            elif e.reason == "CERTIFICATE_VERIFY_FAILED" and util.iswindows:
                 ui.warn(
                     _(
                         "(the full certificate chain may not be available "
@@ -733,9 +733,9 @@ def _plainapplepython():
       for using system certificate store CAs in addition to the provided
       cacerts file
     """
-    if not pycompat.isdarwin or not pycompat.sysexecutable:
+    if not util.isdarwin or not sys.executable:
         return False
-    exe = os.path.realpath(pycompat.sysexecutable).lower()
+    exe = os.path.realpath(sys.executable).lower()
     return exe.startswith("/usr/bin/python") or exe.startswith(
         "/system/library/frameworks/python.framework/"
     )
@@ -776,7 +776,7 @@ def _defaultcacerts(ui) -> Optional[str]:
     # because we'll get a certificate verification error later and the lack
     # of loaded CA certificates will be the reason why.
     # Assertion: this code is only called if certificates are being verified.
-    if pycompat.iswindows:
+    if util.iswindows:
         if not _canloaddefaultcerts:
             ui.warn(
                 _(
@@ -798,7 +798,7 @@ def _defaultcacerts(ui) -> Optional[str]:
 
     # The Apple OpenSSL trick isn't available to us. If Python isn't able to
     # load system certs, we're out of luck.
-    if pycompat.isdarwin:
+    if util.isdarwin:
         # FUTURE Consider looking for Homebrew or MacPorts installed certs
         # files. Also consider exporting the keychain certs to a file during
         # Mercurial install.
@@ -815,7 +815,7 @@ def _defaultcacerts(ui) -> Optional[str]:
     # / is writable on Windows. Out of an abundance of caution make sure
     # we're not on Windows because paths from _systemcacerts could be installed
     # by non-admin users.
-    assert not pycompat.iswindows
+    assert not util.iswindows
 
     # Try to find CA certificates in well-known locations. We print a warning
     # when using a found file because we don't want too much silent magic
@@ -961,3 +961,9 @@ def validatesocket(sock) -> None:
             )
             % (host, nicefingerprint),
         )
+
+
+def _ensurestr(s):
+    if isinstance(s, bytes):
+        s = s.decode("utf-8")
+    return s

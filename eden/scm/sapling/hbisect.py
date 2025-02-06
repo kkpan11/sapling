@@ -19,7 +19,7 @@ from typing import Optional, Sized, Tuple, TYPE_CHECKING
 
 import bindings
 
-from . import error, pycompat
+from . import error
 from .i18n import _
 from .node import hex, short
 
@@ -175,7 +175,7 @@ def extendrange(repo, state, nodes, good):
 def load_state(repo):
     state = {"current": [], "good": [], "bad": [], "skip": []}
     for l in repo.localvfs.tryreadlines("bisect.state"):
-        l = pycompat.decodeutf8(l)
+        l = l.decode()
         kind, node = l[:-1].split(" ", 1)
         if kind not in state:
             raise error.Abort(_("unknown bisect kind %s") % kind)

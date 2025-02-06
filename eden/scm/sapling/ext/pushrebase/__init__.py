@@ -41,6 +41,7 @@ Configs:
 from __future__ import absolute_import
 
 import errno
+import io
 import mmap
 import os
 import tempfile
@@ -63,7 +64,6 @@ from sapling import (
     obsolete,
     perftrace,
     phases as phasesmod,
-    pycompat,
     registrar,
     revsetlang,
     scmutil,
@@ -78,8 +78,6 @@ from sapling.node import bin, hex, nullid, nullrev, short
 from .. import hgsql
 from ..remotefilelog import (
     contentstore,
-    datapack,
-    historypack,
     metadatastore,
     mutablestores,
     shallowbundle,
@@ -1333,18 +1331,18 @@ def getontotarget(op, params, bundle):
 
 def getpushmessage(revs, getmessage):
     # Notify the user of what is being pushed
-    io = pycompat.stringutf8io()
-    io.write(
+    sio = io.StringIO()
+    sio.write(
         _n("pushing %s changeset:\n", "pushing %s changesets:\n", len(revs)) % len(revs)
     )
     maxoutput = 10
     for i in range(0, min(len(revs), maxoutput)):
-        io.write("    %s\n" % (getmessage(revs[i])))
+        sio.write("    %s\n" % (getmessage(revs[i])))
 
     if len(revs) > maxoutput + 1:
-        io.write("    ...\n")
-        io.write("    %s\n" % (getmessage(revs[-1])))
-    return io.getvalue()
+        sio.write("    ...\n")
+        sio.write("    %s\n" % (getmessage(revs[-1])))
+    return sio.getvalue()
 
 
 def runrebase(op, revs, oldonto, onto):

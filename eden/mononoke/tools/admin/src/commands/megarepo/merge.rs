@@ -5,21 +5,39 @@
  * GNU General Public License version 2.
  */
 
+use anyhow::bail;
 use anyhow::format_err;
 use anyhow::Error;
+use anyhow::Result;
 use bonsai_hg_mapping::BonsaiHgMappingRef;
 use cloned::cloned;
 use context::CoreContext;
 use futures::try_join;
 use megarepolib::common::create_save_and_generate_hg_changeset;
-use megarepolib::common::ChangesetArgs;
+use megarepolib::common::ChangesetArgs as MegarepoNewChangesetArgs;
 use megarepolib::working_copy::get_colliding_paths_between_commits;
 use mercurial_derivation::DeriveHgChangeset;
 use mercurial_types::HgChangesetId;
+use mononoke_api::Repo;
+use mononoke_app::args::ChangesetArgs;
+use mononoke_app::args::RepoArgs;
+use mononoke_app::MononokeApp;
 use mononoke_types::ChangesetId;
 use slog::info;
 
-use crate::Repo;
+use super::common::ResultingChangesetArgs;
+
+/// Create a merge commit with given parents
+#[derive(Debug, clap::Args)]
+pub struct MergeArgs {
+    #[clap(flatten, help = "first and second parents of a produced merge commit")]
+    pub parents: ChangesetArgs,
+    #[clap(flatten)]
+    pub repo_args: RepoArgs,
+
+    #[command(flatten)]
+    pub res_cs_args: ResultingChangesetArgs,
+}
 
 async fn fail_on_path_conflicts(
     ctx: &CoreContext,
@@ -50,7 +68,7 @@ pub async fn perform_merge(
     repo: Repo,
     first_bcs_id: ChangesetId,
     second_bcs_id: ChangesetId,
-    resulting_changeset_args: ChangesetArgs,
+    res_cs_args: MegarepoNewChangesetArgs,
 ) -> Result<HgChangesetId, Error> {
     cloned!(ctx, repo);
     let (first_hg_cs_id, second_hg_cs_id) = try_join!(
@@ -67,9 +85,33 @@ pub async fn perform_merge(
         &repo,
         vec![first_bcs_id, second_bcs_id],
         Default::default(),
-        resulting_changeset_args,
+        res_cs_args,
     )
     .await
+}
+
+pub async fn run(ctx: &CoreContext, app: MononokeApp, args: MergeArgs) -> Result<()> {
+    info!(ctx.logger(), "Creating a merge commit");
+
+    let repo: Repo = app.open_repo(&args.repo_args).await?;
+
+    let parents = args.parents.resolve_changesets(ctx, &repo).await?;
+    let (first_parent, second_parent) = match parents[..] {
+        [first_parent, second_parent] => (first_parent, second_parent),
+        _ => bail!("Expected exactly two parent commits"),
+    };
+
+    let res_cs_args = args.res_cs_args.try_into()?;
+
+    perform_merge(
+        ctx.clone(),
+        repo.clone(),
+        first_parent,
+        second_parent,
+        res_cs_args,
+    )
+    .await
+    .map(|_| ())
 }
 
 #[cfg(test)]

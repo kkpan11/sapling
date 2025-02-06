@@ -55,9 +55,8 @@ from __future__ import absolute_import
 import os
 import sys
 
-from sapling import encoding, error, pycompat, registrar
+from sapling import encoding, error, registrar, util
 from sapling.i18n import _, _x
-
 
 # Note for extension authors: ONLY specify testedwith = 'ships-with-hg-core' for
 # extensions which SHIP WITH MERCURIAL. Non-mainline extensions should
@@ -92,7 +91,7 @@ def decode(arg):
 
 
 def encode(arg):
-    if isinstance(arg, pycompat.unicode):
+    if isinstance(arg, str):
         return arg.encode(_encoding)
     elif isinstance(arg, tuple):
         return tuple(map(encode, arg))
@@ -111,7 +110,7 @@ def appendsep(s):
     except UnicodeError:
         us = s
     if us and us[-1] not in ":/\\":
-        s += pycompat.ossep
+        s += os.sep
     return s
 
 
@@ -132,7 +131,7 @@ def basewrapper(func, argtype, enc, dec, args, kwds):
 
 
 def wrapper(func, args, kwds):
-    return basewrapper(func, pycompat.unicode, encode, decode, args, kwds)
+    return basewrapper(func, str, encode, decode, args, kwds)
 
 
 def reversewrapper(func, args, kwds):
@@ -171,11 +170,6 @@ funcs = """os.path.join os.path.split os.path.splitext
  util.fspath util.pconvert util.normpath
  util.split"""
 
-# These functions are required to be called with local encoded string
-# because they expects argument is local encoded string and cause
-# problem with unicode string.
-rfuncs = """encoding.upper encoding.lower"""
-
 # List of Windows specific functions to be wrapped.
 winfuncs = """os.path.splitunc"""
 
@@ -188,7 +182,7 @@ problematic_encodings = """big5 big5-tw csbig5 big5hkscs big5-hkscs
 
 def extsetup(ui) -> None:
     # TODO: decide use of config section for this extension
-    if (not os.path.supports_unicode_filenames) and (pycompat.sysplatform != "cygwin"):
+    if (not os.path.supports_unicode_filenames) and (sys.platform != "cygwin"):
         ui.warn(_("[win32mbcs] cannot activate on this platform.\n"))
         return
     # determine encoding for filename
@@ -198,14 +192,11 @@ def extsetup(ui) -> None:
     if _encoding.lower() in problematic_encodings.split():
         for f in funcs.split():
             wrapname(f, wrapper)
-        if pycompat.iswindows:
+        if util.iswindows:
             for f in winfuncs.split():
                 wrapname(f, wrapper)
         wrapname("util.listdir", wrapperforlistdir)
         wrapname("windows.listdir", wrapperforlistdir)
-        # wrap functions to be called with local byte string arguments
-        for f in rfuncs.split():
-            wrapname(f, reversewrapper)
         # Check sys.args manually instead of using ui.debug() because
         # command line options is not yet applied when
         # extensions.loadall() is called.

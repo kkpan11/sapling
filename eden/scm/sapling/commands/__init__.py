@@ -55,7 +55,6 @@ from .. import (
     mutation,
     patch,
     phases,
-    pycompat,
     rcutil,
     registrar,
     revsetlang,
@@ -67,11 +66,9 @@ from .. import (
     templatekw,
     ui as uimod,
     util,
-    visibility,
 )
 from ..i18n import _
 from ..node import bin, hex, nullid, short
-from ..pycompat import isint, range
 from ..utils import subtreeutil
 from . import cmdtable
 
@@ -420,7 +417,7 @@ def annotate(ui, repo, *pats, **opts):
 
     else:
         hexfn = rootfm.hexfunc
-        formatrev = formathex = pycompat.bytestr
+        formatrev = formathex = str
 
     now = time.time()
 
@@ -531,7 +528,7 @@ def annotate(ui, repo, *pats, **opts):
         for f, p, l, a in zip(zip(*formats), zip(*pieces), lines, agebuckets):
             fm.startitem()
             fm.write(fields, "".join(f) + ": ", *p, label="blame.age." + a)
-            fm.write("line", "%s", pycompat.decodeutf8(l[1], errors="replace"))
+            fm.write("line", "%s", l[1].decode(errors="replace"))
 
         if not lines[-1][1].endswith(b"\n"):
             fm.plain("\n")
@@ -1329,7 +1326,7 @@ def bookmark(ui, repo, *names, **opts):
     if delete or rename or names or inactive:
         with repo.wlock(), repo.lock(), repo.transaction("bookmark") as tr:
             if delete:
-                names = pycompat.maplist(repo._bookmarks.expandname, set(names))
+                names = list(map(repo._bookmarks.expandname, set(names)))
                 bookmarks.delete(repo, tr, names)
             elif rename:
                 if not names:
@@ -1845,7 +1842,7 @@ def config(ui, repo, *values, **opts):
     matched = False
     for section, name, value in ui.walkconfig():
         source = ui.configsource(section, name)
-        value = pycompat.bytestr(value)
+        value = str(value)
         if fm.isplain():
             source = source or "none"
             value = value.replace("\n", "\\n")
@@ -1911,7 +1908,7 @@ def editconfig(ui, repo, *values, **opts):
         targetpath = paths[0]
         os.makedirs(pathlib.Path(targetpath).parent.absolute(), exist_ok=True)
         fp = open(targetpath, "wb")
-        fp.write(pycompat.encodeutf8(util.tonativeeol(_(uimod.samplehgrcs[target]))))
+        fp.write(util.tonativeeol(_(uimod.samplehgrcs[target])).encode())
         fp.close()
 
     if not values:
@@ -2936,7 +2933,7 @@ def grep(ui, repo, pattern, *pats, **opts):
             cwd=reporoot,
         )
         out, err = p.communicate()
-        lines = pycompat.decodeutf8(out.rstrip()).split("\n")
+        lines = out.rstrip().decode().split("\n")
 
         revisionline = lines[0][1:]
 
@@ -3112,7 +3109,7 @@ def _rungrep(ui, cmd, files, match):
 
     with tempfile.NamedTemporaryFile("w+b", prefix="hg-grep") as ftmp:
         for f in files:
-            ftmp.write(pycompat.encodeutf8(match.rel(f) + "\0"))
+            ftmp.write((match.rel(f) + "\0").encode())
         ftmp.flush()
         ftmp.seek(0)
         # XXX: stderr is not redirected to ui.write_err properly.
@@ -3212,15 +3209,15 @@ def help_(ui, *names, **opts):
     name = " ".join(names) if names and names != (None,) else None
     keep = opts.get(r"system") or []
     if len(keep) == 0:
-        if pycompat.sysplatform.startswith("win"):
+        if sys.platform.startswith("win"):
             keep.append("windows")
-        elif pycompat.sysplatform == "OpenVMS":
+        elif sys.platform == "OpenVMS":
             keep.append("vms")
-        elif pycompat.sysplatform == "plan9":
+        elif sys.platform == "plan9":
             keep.append("plan9")
         else:
             keep.append("unix")
-            keep.append(pycompat.sysplatform.lower())
+            keep.append(sys.platform.lower())
     if ui.verbose:
         keep.append("verbose")
 
@@ -3335,7 +3332,7 @@ def histgrep(ui, repo, pattern, *pats, **opts):
     getfile = util.lrucachefunc(repo.file)
 
     def matchlines(body):
-        body = pycompat.decodeutf8(body, errors="replace")
+        body = body.decode(errors="replace")
         begin = 0
         linenum = 0
         while begin < len(body):
@@ -3691,7 +3688,7 @@ def identify(
             fm.data(id=hexoutput)
 
             if num:
-                output.append(pycompat.bytestr(ctx.rev()))
+                output.append(str(ctx.rev()))
 
         if default and not ui.quiet:
             # multiple bookmarks for a single parent separated by '/'
@@ -4948,7 +4945,7 @@ def push(ui, repo, dest=None, **opts):
 
     if revs:
         clnode = repo.changelog.node
-        if all(isint(r) for r in revs):
+        if all(isinstance(r, int) for r in revs):
             revs = [clnode(r) for r in revs]
         else:
             revs = [clnode(r) for r in scmutil.revrange(repo, revs)]

@@ -69,6 +69,7 @@ from eden.fs.cli.util import (
     wait_for_instance_healthy,
 )
 from eden.thrift.legacy import EdenClient, EdenNotRunningError
+
 from facebook.eden import EdenService
 from facebook.eden.ttypes import ChangeOwnershipRequest, MountState
 from fb303_core.ttypes import fb303_status
@@ -982,10 +983,15 @@ is case-sensitive. This is not recommended and is intended only for testing."""
                 args.rev,
                 args.nfs,
                 args.case_sensitive,
-                args.overlay_type,
-                args.backing_store,
-                args.re_use_case,
-                enable_windows_symlinks,
+                overlay_type=args.overlay_type,
+                backing_store_type=args.backing_store,
+                re_use_case=args.re_use_case,
+                enable_windows_symlinks=enable_windows_symlinks,
+                off_mount_repo_dir=instance.get_config_bool(
+                    "clone.off-mount-repo-dir",
+                    # Enable by default in tests.
+                    any(v in os.environ for v in ("INTEGRATION_TEST", "TESTTMP")),
+                ),
             )
         except util.RepoError as ex:
             print_stderr("error: {}", ex)
@@ -1294,6 +1300,9 @@ class HealthReportCmd(Subcmd):
         return True
 
     def are_certs_valid(self) -> bool:
+        if util.is_sandcastle() or util.x2p_enabled():
+            return True
+
         if (cert := check_x509.find_x509_path()) and check_x509.validate_x509(cert):
             return True
         # cert error!

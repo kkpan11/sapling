@@ -17,18 +17,7 @@ import re
 import sys
 import time
 
-from . import (
-    encoding,
-    hbisect,
-    json as jsonmod,
-    pycompat,
-    registrar,
-    templatekw,
-    url,
-    util,
-)
-from .pycompat import range
-
+from . import encoding, hbisect, json as jsonmod, registrar, templatekw, url, util
 
 urlerr = util.urlerr
 urlreq = util.urlreq
@@ -166,11 +155,11 @@ def fill(text, width, initindent="", hangindent=""):
         while True:
             m = para_re.search(text, start)
             if not m:
-                uctext = pycompat.ensureunicode(text[start:])
+                uctext = text[start:]
                 w = len(uctext)
                 while 0 < w and uctext[w - 1].isspace():
                     w -= 1
-                yield (pycompat.ensurestr(uctext[:w]), pycompat.ensurestr(uctext[w:]))
+                yield (uctext[:w], uctext[w:])
                 break
             yield text[start : m.start(0)], m.group(1)
             start = m.end(1)
@@ -268,7 +257,7 @@ def json(obj, paranoid=True):
 @templatefilter("lower")
 def lower(text):
     """Any text. Converts the text to lowercase."""
-    return encoding.lower(text)
+    return text.lower()
 
 
 @templatefilter("nonempty")
@@ -282,7 +271,6 @@ def obfuscate(text):
     """Any text. Returns the input text rendered as a sequence of
     XML entities.
     """
-    text = pycompat.ensureunicode(text, errors="replace")  # noqa
     return "".join(["&#%d;" % ord(c) for c in text])
 
 
@@ -397,12 +385,12 @@ def stringify(thing):
     """
     thing = templatekw.unwraphybrid(thing)
     if isinstance(thing, bytes):
-        return pycompat.decodeutf8(thing)
+        return thing.decode()
     if hasattr(thing, "__iter__") and not isinstance(thing, str):
         return "".join([stringify(t) for t in thing if t is not None])
     if thing is None:
         return ""
-    return pycompat.bytestr(thing)
+    return str(thing)
 
 
 def byteify(thing):
@@ -413,12 +401,12 @@ def byteify(thing):
     if isinstance(thing, bytes):
         return thing
     if isinstance(thing, str):
-        return pycompat.encodeutf8(thing)
+        return thing.encode()
     if hasattr(thing, "__iter__"):
         return b"".join([byteify(t) for t in thing if t is not None])
     if thing is None:
         return b""
-    return pycompat.encodeutf8(stringify(thing))
+    return stringify(thing).encode()
 
 
 @templatefilter("stripdir")
@@ -444,7 +432,7 @@ def tabindent(text):
 @templatefilter("upper")
 def upper(text):
     """Any text. Converts the text to uppercase."""
-    return encoding.upper(text)
+    return text.upper()
 
 
 @templatefilter("urlescape")

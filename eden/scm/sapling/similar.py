@@ -14,7 +14,7 @@ from __future__ import absolute_import
 
 import bindings
 
-from . import progress, pycompat
+from . import progress
 from .i18n import _
 
 
@@ -97,6 +97,8 @@ def _dropempty(fctxs):
 
 def findrenames(repo, added, removed, threshold):
     """find renamed files -- yields (before, after, score) tuples"""
+    if not added or not removed:
+        return
     wctx = repo[None]
     pctx = wctx.p1()
 

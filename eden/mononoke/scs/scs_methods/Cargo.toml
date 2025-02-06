@@ -37,6 +37,7 @@ gix-hash = "0.15.1"
 hooks = { version = "0.1.0", path = "../../hooks" }
 itertools = "0.14.0"
 justknobs = { version = "0.1.0", git = "https://github.com/facebookexperimental/rust-shed.git", branch = "main" }
+lazy_static = "1.4"
 maplit = "1.0"
 megarepo_api = { version = "0.1.0", path = "../../megarepo_api" }
 megarepo_config = { version = "0.1.0", path = "../../megarepo_api/megarepo_config" }
@@ -47,6 +48,7 @@ mononoke_api = { version = "0.1.0", path = "../../mononoke_api" }
 mononoke_api_hg = { version = "0.1.0", path = "../../mononoke_api_hg" }
 mononoke_app = { version = "0.1.0", path = "../../cmdlib/mononoke_app" }
 mononoke_configs = { version = "0.1.0", path = "../../mononoke_configs" }
+mononoke_macros = { version = "0.1.0", path = "../../mononoke_macros" }
 mononoke_types = { version = "0.1.0", path = "../../mononoke_types" }
 permission_checker = { version = "0.1.0", path = "../../permission_checker" }
 phases = { version = "0.1.0", path = "../../phases" }
