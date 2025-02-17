@@ -14,10 +14,10 @@ use async_stream::try_stream;
 use bonsai_git_mapping::BonsaiGitMappingRef;
 use bonsai_git_mapping::BonsaisOrGitShas;
 use bytes::Bytes;
+use cloned::cloned;
 use futures::future::try_join4;
 use futures::SinkExt;
 use futures::StreamExt;
-use gix_hash::ObjectId;
 use gotham::mime;
 use gotham::state::FromState;
 use gotham::state::State;
@@ -30,10 +30,11 @@ use gotham_ext::response::StreamBody;
 use gotham_ext::response::TryIntoResponse;
 use hyper::Body;
 use hyper::Response;
-use mononoke_types::ChangesetId;
+use mononoke_macros::mononoke;
 use packetline::encode::delim_to_write;
 use packetline::encode::flush_to_write;
 use packetline::encode::write_data_channel;
+use packetline::encode::write_error_channel;
 use packetline::encode::write_progress_channel;
 use packetline::encode::write_text_packetline;
 use packetline::FLUSH_LINE;
@@ -42,7 +43,6 @@ use packfile::pack::PackfileWriter;
 use protocol::generator::fetch_response;
 use protocol::generator::ls_refs_response;
 use protocol::generator::shallow_info as fetch_shallow_info;
-use protocol::mapping::bonsai_git_mappings_by_bonsai;
 use protocol::mapping::ref_oid_mapping;
 use protocol::types::PackfileConcurrency;
 use protocol::types::ShallowInfoResponse;
@@ -63,6 +63,8 @@ use crate::model::RepositoryParams;
 use crate::model::RepositoryRequestContext;
 use crate::model::ResponseType;
 use crate::model::Service;
+use crate::scuba::MononokeGitScubaHandler;
+use crate::scuba::MononokeGitScubaKey;
 use crate::util::empty_body;
 use crate::util::get_body;
 
@@ -146,22 +148,6 @@ async fn acknowledgements(
     }
     Ok((Some(Bytes::from(output_buffer)), None))
 }
-
-async fn git_commits(
-    context: Arc<RepositoryRequestContext>,
-    bonsais: Vec<ChangesetId>,
-) -> Result<impl Iterator<Item = ObjectId>, Error> {
-    bonsai_git_mappings_by_bonsai(&context.ctx, &context.repo, bonsais)
-        .await
-        .map(|entries| entries.into_values())
-        .with_context(|| {
-            format!(
-                "Failed to fetch bonsai_git_mapping for repo {}",
-                context.repo.repo_identity().name()
-            )
-        })
-}
-
 async fn shallow_info(
     context: Arc<RepositoryRequestContext>,
     args: Arc<FetchArgs>,
@@ -179,17 +165,17 @@ async fn shallow_info(
         args.into_shallow_request(),
     )
     .await?;
-    let boundary_git_commits =
-        git_commits(context.clone(), response.boundary_commits.clone()).await?;
-    for boundary_commit in boundary_git_commits {
+    for boundary_commit in response.boundary_commits.iter() {
         write_text_packetline(
-            format!("shallow {}", boundary_commit.to_hex()).as_bytes(),
+            format!("shallow {}", boundary_commit.oid().to_hex()).as_bytes(),
             &mut output_buffer,
         )
         .await?;
     }
-    let git_commits = git_commits(context.clone(), response.commits.clone())
-        .await?
+    let git_commits = response
+        .commits
+        .iter()
+        .map(|entry| entry.oid())
         .collect::<FxHashSet<_>>();
     for client_shallow_commit in request.shallow {
         if git_commits.contains(&client_shallow_commit) {
@@ -340,7 +326,8 @@ pub async fn upload_pack(state: &mut State) -> Result<Response<Body>, HttpError>
             output.map_err(HttpError::e500)
         }
         Command::Fetch(fetch_args) => {
-            let output = fetch(&request_context, fetch_args).await;
+            let scuba_handler = MononokeGitScubaHandler::from_state(state);
+            let output = fetch(&request_context, fetch_args, scuba_handler).await;
             let output = output.map_err(HttpError::e500)?.try_into_response(state);
             output.map_err(HttpError::e500)
         }
@@ -371,8 +358,11 @@ pub async fn ls_refs(
 pub async fn fetch(
     request_context: &RepositoryRequestContext,
     args: FetchArgs,
+    scuba_handler: MononokeGitScubaHandler,
 ) -> Result<impl TryIntoResponse, Error> {
     let (writer, reader) = mpsc::channel::<Bytes>(100_000_000);
+    let (progress_writer, mut progress_reader) = mpsc::channel::<String>(50);
+    let (error_writer, mut err_reader) = mpsc::channel::<String>(50);
     let sink_writer = SinkWriter::new(CopyToBytes::new(
         PollSender::new(writer).sink_map_err(|_| std::io::Error::from(ErrorKind::BrokenPipe)),
     ));
@@ -380,6 +370,11 @@ pub async fn fetch(
         FetchResponseHeaders::from_request(request_context.clone(), args.clone()).await?;
     let include_pack = fetch_response_headers.include_pack();
     let shallow_response = fetch_response_headers.shallow_response.take();
+    let delta_form = if request_context.pushvars.use_only_offset_delta() {
+        DeltaForm::OnlyOffset
+    } else {
+        DeltaForm::RefAndOffset
+    };
 
     // Some repos might be configured to display a message to users when they
     // run `git pull`.
@@ -396,6 +391,11 @@ pub async fn fetch(
                 write_progress_channel(fetch_msg.as_ref(), &mut buf).await?;
                 yield Bytes::from(buf);
             }
+            while let Some(progress) = progress_reader.recv().await {
+                let mut buf = Vec::with_capacity(progress.len());
+                write_progress_channel(progress.as_ref(), &mut buf).await?;
+                yield Bytes::from(buf);
+            }
             while let Some(chunks) = pack_reader.next().await {
                 for chunk in chunks {
                     let mut buf = Vec::with_capacity(chunk.len());
@@ -404,30 +404,55 @@ pub async fn fetch(
                     yield Bytes::from(buf);
                 }
             }
+            while let Some(err_msg) = err_reader.recv().await {
+                let mut buf = Vec::with_capacity(err_msg.len());
+                write_error_channel(err_msg.as_ref(), &mut buf).await?;
+                yield Bytes::from(buf);
+            }
         }
         let mut buf = Vec::with_capacity(FLUSH_LINE.len());
         flush_to_write(&mut buf).await?;
         yield Bytes::from(buf);
     })
     .end_on_err::<anyhow::Error>();
-    tokio::spawn({
+    mononoke::spawn_task({
         let request_context = request_context.clone();
         async move {
-            let response_stream = fetch_response(
-                request_context.ctx.clone(),
-                &request_context.repo,
-                args.into_request(concurrency(&request_context), shallow_response),
-            )
-            .await?;
-            let mut pack_writer = PackfileWriter::new(
-                sink_writer,
-                response_stream.num_items as u32,
-                5000,
-                DeltaForm::RefAndOffset,
-            );
-            pack_writer.write(response_stream.items).await?;
-            pack_writer.finish().await?;
-            anyhow::Ok(())
+            let mut scuba = scuba_handler.to_scuba(&request_context.ctx);
+            cloned!(scuba as perf_scuba);
+            let writer_future = async move {
+                if delta_form == DeltaForm::OnlyOffset {
+                    progress_writer
+                        .send("Packfile will be created using only offset deltas\n".to_string())
+                        .await?;
+                }
+                let response_stream = fetch_response(
+                    request_context.ctx.clone(),
+                    &request_context.repo,
+                    args.into_request(concurrency(&request_context), shallow_response),
+                    progress_writer,
+                    perf_scuba,
+                )
+                .await?;
+                let mut pack_writer = PackfileWriter::new(
+                    sink_writer,
+                    response_stream.num_items as u32,
+                    5000,
+                    delta_form,
+                );
+                pack_writer.write(response_stream.items).await?;
+                pack_writer.finish().await?;
+                anyhow::Ok(())
+            };
+            match writer_future.await {
+                Ok(_) => anyhow::Ok(()),
+                Err(e) => {
+                    scuba.add(MononokeGitScubaKey::PackfileReadError, format!("{:?}", e));
+                    scuba.log();
+                    error_writer.send(format!("{:?}", e)).await?;
+                    Ok(())
+                }
+            }
         }
     });
 

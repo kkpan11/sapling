@@ -7,6 +7,7 @@
 
 #pragma once
 
+#include <eden/common/utils/SpawnedProcess.h>
 #include <sys/types.h>
 #include <limits>
 #include <set>
@@ -25,6 +26,24 @@ class Cursor;
 } // namespace folly
 
 namespace facebook::eden {
+
+struct FileAccessMonitorProcess {
+  SpawnedProcess proc;
+
+  std::string tmpOutputPath;
+  std::string specifiedOutputPath;
+  bool shouldUpload;
+
+  FileAccessMonitorProcess(
+      SpawnedProcess p,
+      std::string tmpOutputPath,
+      std::string specifiedOutputPath,
+      bool shouldUpload)
+      : proc(std::move(p)),
+        tmpOutputPath(std::move(tmpOutputPath)),
+        specifiedOutputPath(std::move(specifiedOutputPath)),
+        shouldUpload(shouldUpload) {}
+};
 
 /*
  * PrivHelperServer runs the main loop for the privhelper server process.
@@ -98,6 +117,8 @@ class PrivHelperServer : private UnixSocket::ReceiveCallback {
       folly::io::Cursor& cursor,
       UnixSocket::Message& request);
   UnixSocket::Message processGetPid();
+  UnixSocket::Message processStartFam(folly::io::Cursor& cursor);
+  UnixSocket::Message processStopFam();
 
   void unmountStaleMount(const std::string& mountPoint);
 
@@ -114,7 +135,7 @@ class PrivHelperServer : private UnixSocket::ReceiveCallback {
   virtual folly::File
   fuseMount(const char* mountPath, bool readOnly, const char* vfsType);
   virtual void nfsMount(std::string mountPath, NFSMountOptions options);
-  virtual void unmount(const char* mountPath);
+  virtual void unmount(const char* mountPath, UnmountOptions options);
   // Both clientPath and mountPath must be existing directories.
   virtual void bindMount(const char* clientPath, const char* mountPath);
   virtual void bindUnmount(const char* mountPath);
@@ -127,6 +148,7 @@ class PrivHelperServer : private UnixSocket::ReceiveCallback {
   gid_t gid_{std::numeric_limits<gid_t>::max()};
   std::chrono::nanoseconds fuseTimeout_{std::chrono::seconds(60)};
   bool useDevEdenFs_{false};
+  std::unique_ptr<FileAccessMonitorProcess> famProcess_;
 
   // The privhelper server only has a single thread,
   // so we don't need to lock the following state

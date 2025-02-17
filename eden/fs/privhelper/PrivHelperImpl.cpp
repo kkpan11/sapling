@@ -111,7 +111,8 @@ class PrivHelperClientImpl : public PrivHelper,
       StringPiece vfsType) override;
   Future<Unit> nfsMount(folly::StringPiece mountPath, NFSMountOptions options)
       override;
-  Future<Unit> fuseUnmount(StringPiece mountPath) override;
+  Future<Unit> fuseUnmount(StringPiece mountPath, UnmountOptions options)
+      override;
   Future<Unit> nfsUnmount(StringPiece mountPath) override;
   Future<Unit> bindMount(StringPiece clientPath, StringPiece mountPath)
       override;
@@ -125,6 +126,12 @@ class PrivHelperClientImpl : public PrivHelper,
       std::chrono::nanoseconds duration) override;
   Future<folly::Unit> setUseEdenFs(bool useEdenFs) override;
   Future<pid_t> getServerPid() override;
+  Future<pid_t> startFam(
+      const std::vector<std::string>& paths,
+      const std::string& tmpOutputPath,
+      const std::string& specifiedOutputPath,
+      const bool shouldUpload) override;
+  Future<StopFileAccessMonitorResponse> stopFam() override;
   int stop() override;
   int getRawClientFd() const override {
     auto state = state_.rlock();
@@ -443,14 +450,39 @@ Future<Unit> PrivHelperClientImpl::nfsMount(
           });
 }
 
-Future<Unit> PrivHelperClientImpl::fuseUnmount(StringPiece mountPath) {
+Future<Unit> PrivHelperClientImpl::fuseUnmount(
+    StringPiece mountPath,
+    UnmountOptions options) {
   auto xid = getNextXid();
-  auto request = PrivHelperConn::serializeUnmountRequest(xid, mountPath);
+  auto request =
+      PrivHelperConn::serializeUnmountRequest(xid, mountPath, options);
+
   return sendAndRecv(xid, std::move(request))
-      .thenValue([](UnixSocket::Message&& response) {
-        PrivHelperConn::parseEmptyResponse(
-            PrivHelperConn::REQ_UNMOUNT_FUSE, response);
-      });
+      .thenValue(
+          [this, mountPath = mountPath.str(), options](
+              UnixSocket::Message&& response) mutable -> Future<Unit> {
+            try {
+              PrivHelperConn::parseEmptyResponse(
+                  PrivHelperConn::REQ_UNMOUNT_FUSE, response);
+              return folly::unit;
+            } catch (const PrivHelperError&) {
+              // If the unmount failed, it likely means we are communicating
+              // with a PrivHelper server that doesn't understand the new
+              // UnmountOptions fields.  Retry the unmount without serializing
+              // the new fields.
+              // TODO[T214491519] remove this after 1-2 months.
+              options.skip_serialize = true;
+              auto retryXid = getNextXid();
+              auto retryRequest = PrivHelperConn::serializeUnmountRequest(
+                  retryXid, mountPath, options);
+              return sendAndRecv(retryXid, std::move(retryRequest))
+                  .thenValue([](UnixSocket::Message&& retryResponse) {
+                    PrivHelperConn::parseEmptyResponse(
+                        PrivHelperConn::REQ_UNMOUNT_FUSE, retryResponse);
+                    return folly::unit;
+                  });
+            }
+          });
 }
 
 Future<Unit> PrivHelperClientImpl::nfsUnmount(StringPiece mountPath) {
@@ -559,6 +591,37 @@ Future<pid_t> PrivHelperClientImpl::getServerPid() {
   return sendAndRecv(xid, std::move(request))
       .thenValue([](UnixSocket::Message&& response) {
         return PrivHelperConn::parseGetPidResponse(response);
+      });
+}
+
+Future<pid_t> PrivHelperClientImpl::startFam(
+    const std::vector<std::string>& paths,
+    const std::string& tmpOutputPath,
+    const std::string& specifiedOutputPath,
+    const bool shouldUpload) {
+  auto xid = getNextXid();
+  auto request = PrivHelperConn::serializeStartFamRequest(
+      xid, paths, tmpOutputPath, specifiedOutputPath, shouldUpload);
+
+  return sendAndRecv(xid, std::move(request))
+      .thenValue([](UnixSocket::Message&& response) {
+        return PrivHelperConn::parseStartFamResponse(response);
+      });
+}
+
+Future<StopFileAccessMonitorResponse> PrivHelperClientImpl::stopFam() {
+  auto xid = getNextXid();
+  auto request = PrivHelperConn::serializeStopFamRequest(xid);
+
+  return sendAndRecv(xid, std::move(request))
+      .thenValue([&](UnixSocket::Message&& response) {
+        StopFileAccessMonitorResponse stopResponse{};
+        PrivHelperConn::parseStopFamResponse(
+            response,
+            stopResponse.tmpOutputPath,
+            stopResponse.specifiedOutputPath,
+            stopResponse.shouldUpload);
+        return stopResponse;
       });
 }
 
@@ -793,7 +856,8 @@ class StubPrivHelper final : public PrivHelper {
   }
 
   folly::Future<folly::Unit> fuseUnmount(
-      folly::StringPiece mountPath) override {
+      folly::StringPiece mountPath,
+      UnmountOptions /* options */) override {
     (void)mountPath;
     NOT_IMPLEMENTED();
   }
@@ -851,6 +915,18 @@ class StubPrivHelper final : public PrivHelper {
 
   folly::Future<pid_t> getServerPid() override {
     return -1;
+  }
+
+  folly::Future<pid_t> startFam(
+      const std::vector<std::string>& paths,
+      const std::string& tmpOutputPath,
+      const std::string& specifiedOutputPath,
+      const bool shouldUpload) override {
+    NOT_IMPLEMENTED();
+  }
+
+  folly::Future<StopFileAccessMonitorResponse> stopFam() override {
+    NOT_IMPLEMENTED();
   }
 
   int stop() override {

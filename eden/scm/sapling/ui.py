@@ -42,7 +42,6 @@ from . import (
     metrics,
     perftrace,
     progress,
-    pycompat,
     rcutil,
     scmutil,
     uiconfig,
@@ -50,7 +49,6 @@ from . import (
 )
 from .i18n import _
 from .node import hex
-from .pycompat import decodeutf8, encodeutf8
 
 urlreq = util.urlreq
 
@@ -710,17 +708,12 @@ class ui:
             msgs = self._addprefixesandlabels(args, opts, bool(self._bufferapplylabels))
             self._buffers[-1].extend(msgs)
         else:
-            if self.formatted:
-                # Convert arguments from local encoding to output encoding
-                # if these encodings differ (e.g. Python 2.7 on Windows).
-                # pyre-fixme[9]: Unable to unpack `List[typing.Any]`, expected a tuple.
-                args = [encoding.localtooutput(arg) for arg in args]
             msgs = self._addprefixesandlabels(args, opts, bool(self._colormode))
             self._write(*msgs)
 
     def _write(self, *msgs: str) -> None:
         try:
-            self.fout.write(encodeutf8("".join(msgs)))
+            self.fout.write("".join(msgs).encode())
         except IOError as err:
             raise error.StdioError(err)
 
@@ -764,7 +757,7 @@ class ui:
                 self.fout.flush()
             # Write all messages in a single operation as stderr may be
             # unbuffered.
-            self.ferr.write(encodeutf8("".join(msgs)))
+            self.ferr.write("".join(msgs).encode())
             # stderr may be buffered under win32 when redirected to files,
             # including stdout.
             if not getattr(self.ferr, "closed", False):
@@ -824,7 +817,7 @@ class ui:
             or self.plain("pager")
             or self._buffers
             # TODO: expose debugger-enabled on the UI object
-            or "--debugger" in pycompat.sysargv
+            or "--debugger" in sys.argv
         ):
             # We only want to paginate if the ui appears to be
             # interactive, the user didn't say HGPLAIN or
@@ -1044,16 +1037,16 @@ class ui:
         # - http://bugs.python.org/issue12833
         with self.timeblockedsection("stdio"):  # fin is not yet Rust IO
             if usereadline:
-                line = pycompat.rawinput("")
+                line = input("")
             else:
-                line = pycompat.decodeutf8(self.fin.readline())
+                line = self.fin.readline().decode()
                 if not line:
                     raise EOFError
-                line = line.rstrip(pycompat.oslinesep)
+                line = line.rstrip(os.linesep)
 
         # When stdin is in binary mode on Windows, it can cause
         # raw_input() to emit an extra trailing carriage return
-        if pycompat.oslinesep == "\r\n" and line and line[-1] == "\r":
+        if os.linesep == "\r\n" and line and line[-1] == "\r":
             line = line[:-1]
         return line
 
@@ -1138,7 +1131,7 @@ class ui:
             # to interact with tty even if fin is not a tty.
             with self.timeblockedsection("stdio"):  # fin is not Rust IO
                 if self.configbool("ui", "nontty"):
-                    l = decodeutf8(self.fin.readline())
+                    l = self.fin.readline().decode()
                     if not l:
                         raise EOFError
                     return l.rstrip("\n")
@@ -1246,7 +1239,7 @@ class ui:
         )
         try:
             f = util.fdopen(fd, r"wb")
-            f.write(encodeutf8(util.tonativeeol(text)))
+            f.write(util.tonativeeol(text).encode())
             f.close()
 
             environ = {"HGUSER": user}
@@ -1288,7 +1281,7 @@ class ui:
                     )
 
             f = open(name, r"rb")
-            t = util.fromnativeeol(decodeutf8(f.read()))
+            t = util.fromnativeeol(f.read().decode())
             f.close()
         finally:
             if rdir is None:
@@ -1325,8 +1318,10 @@ class ui:
             suspend = progress.suspend
         else:
             suspend = util.nullcontextmanager
-        with self.timeblockedsection(blockedtag), suspend(), util.traced(
-            blockedtag, cat="blocked"
+        with (
+            self.timeblockedsection(blockedtag),
+            suspend(),
+            util.traced(blockedtag, cat="blocked"),
         ):
             rc = self._runsystem(cmd, environ=environ, cwd=cwd, out=out)
         if rc and onerr:
@@ -1407,12 +1402,12 @@ class ui:
 
     def geteditor(self):
         """return editor to use"""
-        if pycompat.sysplatform == "plan9":
+        if sys.platform == "plan9":
             # vi is the MIPS instruction simulator on Plan 9. We
             # instead default to E to plumb commit messages to
             # avoid confusion.
             defaulteditor = "E"
-        elif pycompat.sysplatform == "win32":
+        elif sys.platform == "win32":
             defaulteditor = "notepad.exe"
         else:
             defaulteditor = "vi"
@@ -1621,10 +1616,7 @@ class ui:
             pass
 
         if self.configbool("sampling", "debug"):
-            self.write_err(
-                "%s\n"
-                % pycompat.toutf8lossy(json.dumps({"data": opts, "category": category}))
-            )
+            self.write_err("%s\n" % json.dumps({"data": opts, "category": category}))
 
     def label(self, msg, label, usebytes=False):
         """style msg based on supplied label
@@ -1737,7 +1729,7 @@ def _normalizepath(rawloc: str) -> str:
     rawloc = rawloc.split("?", 1)[0]
     if rawloc.startswith("file:"):
         rawloc = rawloc[5:]
-    if pycompat.iswindows:
+    if util.iswindows:
         rawloc = rawloc.replace("\\", "/")
     if os.path.sep != "/":
         rawloc = rawloc.replace(":///", ":")

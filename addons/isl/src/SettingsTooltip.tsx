@@ -8,17 +8,30 @@
 import type {ThemeColor} from './theme';
 import type {PreferredSubmitCommand} from './types';
 
+import {Button} from 'isl-components/Button';
+import {Checkbox} from 'isl-components/Checkbox';
+import {Dropdown} from 'isl-components/Dropdown';
+import {Icon} from 'isl-components/Icon';
+import {Kbd} from 'isl-components/Kbd';
+import {KeyCode, Modifier} from 'isl-components/KeyboardShortcuts';
+import {Subtle} from 'isl-components/Subtle';
+import {Tooltip} from 'isl-components/Tooltip';
+import {useAtom, useAtomValue} from 'jotai';
+import {Suspense} from 'react';
+import {nullthrows, tryJsonParse} from 'shared/utils';
 import {rebaseOffWarmWarningEnabled} from './Commit';
 import {condenseObsoleteStacks} from './CommitTreeList';
 import {Column, Row} from './ComponentUtils';
 import {confirmShouldSubmitEnabledAtom} from './ConfirmSubmitStack';
 import {DropdownField, DropdownFields} from './DropdownFields';
 import {useShowKeyboardShortcutsHelp} from './ISLShortcuts';
-import {Internal} from './Internal';
 import {Link} from './Link';
 import {RestackBehaviorSetting} from './RestackBehavior';
 import {Setting} from './Setting';
-import {hasExperimentalFeatures} from './atoms/experimentalFeatureAtoms';
+import {
+  currentExperimentalFeaturesList,
+  hasExperimentalFeatures,
+} from './atoms/experimentalFeatureAtoms';
 import {codeReviewProvider} from './codeReview/CodeReviewInfo';
 import {showDiffNumberConfig} from './codeReview/DiffBadge';
 import {SubmitAsDraftCheckbox} from './codeReview/DraftCheckbox';
@@ -27,7 +40,6 @@ import {
   experimentalBranchPRsEnabled,
   overrideDisabledSubmitModes,
 } from './codeReview/github/branchPrState';
-import GatedComponent from './components/GatedComponent';
 import {debugToolsEnabledState} from './debug/DebugToolsState';
 import {externalMergeToolAtom} from './externalMergeTool';
 import {t, T} from './i18n';
@@ -39,18 +51,7 @@ import platform from './platform';
 import {irrelevantCwdDeemphasisEnabled} from './repositoryData';
 import {renderCompactAtom, useZoomShortcut, zoomUISettingAtom} from './responsive';
 import {repositoryInfo} from './serverAPIState';
-import {useThemeShortcut, themeState} from './theme';
-import {Button} from 'isl-components/Button';
-import {Checkbox} from 'isl-components/Checkbox';
-import {Dropdown} from 'isl-components/Dropdown';
-import {Icon} from 'isl-components/Icon';
-import {Kbd} from 'isl-components/Kbd';
-import {KeyCode, Modifier} from 'isl-components/KeyboardShortcuts';
-import {Subtle} from 'isl-components/Subtle';
-import {Tooltip} from 'isl-components/Tooltip';
-import {useAtom, useAtomValue} from 'jotai';
-import {Suspense} from 'react';
-import {tryJsonParse, nullthrows} from 'shared/utils';
+import {themeState, useThemeShortcut} from './theme';
 
 import './SettingsTooltip.css';
 
@@ -458,8 +459,6 @@ function DebugToolsField() {
   const provider = useAtomValue(codeReviewProvider);
 
   const [branchPrsEnabled, setBranchPrsEnabled] = useAtom(experimentalBranchPRsEnabled);
-  const [experimentalFeaturesEnabled, setExperimentalFeaturesEnabled] =
-    useAtom(hasExperimentalFeatures);
 
   return (
     <DropdownField title={t('Debug Tools & Experimental')}>
@@ -471,13 +470,7 @@ function DebugToolsField() {
           }}>
           <T>Enable Debug Tools</T>
         </Checkbox>
-        <Checkbox
-          checked={experimentalFeaturesEnabled}
-          onChange={checked => {
-            setExperimentalFeaturesEnabled(checked);
-          }}>
-          <T>Enable Experimental Features</T>
-        </Checkbox>
+        <ExperimentalFeaturesCheckbox />
         {provider?.submitDisabledReason?.() != null && (
           <Checkbox
             checked={overrideDisabledSubmit}
@@ -497,5 +490,31 @@ function DebugToolsField() {
         )}
       </Column>
     </DropdownField>
+  );
+}
+
+function ExperimentalFeaturesCheckbox() {
+  const [experimentalFeaturesEnabled, setExperimentalFeaturesEnabled] =
+    useAtom(hasExperimentalFeatures);
+
+  if (currentExperimentalFeaturesList.length === 0) {
+    return null;
+  }
+
+  return (
+    <Tooltip
+      title={t(
+        `Enable experimental features that are still being developed and may not work as expected.
+
+Current experimental features: ${currentExperimentalFeaturesList.join(', ')}`,
+      )}>
+      <Checkbox
+        checked={experimentalFeaturesEnabled}
+        onChange={checked => {
+          setExperimentalFeaturesEnabled(checked);
+        }}>
+        <T>Enable Experimental Features</T>
+      </Checkbox>
+    </Tooltip>
   );
 }

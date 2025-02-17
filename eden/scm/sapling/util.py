@@ -29,16 +29,18 @@ import contextlib
 import datetime
 import errno
 import functools
-import gc
 import hashlib
+import io
 import itertools
 import mmap
 import os
+import pickle  # noqa: F401
 import random
 import re as remod
 import shutil
 import signal as signalmod
 import socket
+import socketserver  # noqa: F401
 import stat as statmod
 import string
 import subprocess
@@ -63,6 +65,7 @@ from typing import (
 )
 
 import bindings
+
 from sapling import tracing
 
 from . import (
@@ -71,37 +74,29 @@ from . import (
     error,
     fscap,
     i18n,
-    identity,
-    pycompat,
+    identity as identitymod,
     redact,
+    sysutil,
     urllibcompat,
 )
-from .pycompat import decodeutf8, encodeutf8, range
 
 osutil = bindings.cext.osutil
 
 getsignal = signalmod.getsignal
 signal = signalmod.signal
 
-# pyre-fixme[11]: Annotation `cookiejar` is not defined as a type.
-cookielib = pycompat.cookielib
-empty = pycompat.empty
-full = pycompat.queue.Full
-# pyre-fixme[11]: Annotation `client` is not defined as a type.
-httplib = pycompat.httplib
-# pyre-fixme[11]: Annotation `pickle` is not defined as a type.
-pickle = pycompat.pickle
-queue = pycompat.queue.Queue
-# pyre-fixme[11]: Annotation `socketserver` is not defined as a type.
-socketserver = pycompat.socketserver
-stderr = pycompat.stderr
-stdin = pycompat.stdin
-stdout = pycompat.stdout
-stringio = pycompat.stringio
+stdin = sys.stdin.buffer
+stdout = sys.stdout.buffer
+stderr = sys.stderr.buffer
 
 httpserver = urllibcompat.httpserver
 urlerr = urllibcompat.urlerr
 urlreq = urllibcompat.urlreq
+
+isposix = sysutil.isposix
+isdarwin = sysutil.isdarwin
+islinux = sysutil.islinux
+iswindows = sysutil.iswindows
 
 
 def isatty(fp):
@@ -124,7 +119,7 @@ def isstdout(fp):
 if isatty(stdout):
     stdout = os.fdopen(stdout.fileno(), "wb")
 
-if pycompat.iswindows:
+if iswindows:
     from . import windows as platform
 
     stdout = platform.winstdout(stdout)
@@ -177,7 +172,6 @@ pconvert = platform.pconvert
 popen = platform.popen
 posixfile = platform.posixfile
 removedirs = platform.removedirs
-rename = platform.rename
 samedevice = platform.samedevice
 samefile = platform.samefile
 samestat = platform.samestat
@@ -215,6 +209,22 @@ except AttributeError:
 _notset = object()
 
 
+def rename(src, dst):
+    try:
+        platform.rename(src, dst)
+    except OSError as ex:
+        # If rename resulted in cross-device error, retry using shutil, which falls back
+        # to less efficient methods. This applies for both posix and windows, so it lives
+        # here.
+        if ex.errno != errno.EXDEV:
+            raise
+        shutil.move(src, dst)
+
+    # This is the return value of os.rename(). shutil.move() returns something different -
+    # ignore that.
+    return None
+
+
 def statislink(st):
     """check whether a stat result is a symlink"""
     return st and statmod.S_ISLNK(st.st_mode)
@@ -232,7 +242,7 @@ def checklink(path: str) -> bool:
     # mktemp is not racy because symlink creation will fail if the
     # file already exists
     while True:
-        ident = identity.sniffdir(path) or identity.default()
+        ident = identitymod.sniffdir(path) or identitymod.default()
         cachedir = os.path.join(path, ident.dotdir(), "cache")
         checklink = os.path.join(cachedir, "checklink")
         # try fast path, read only
@@ -426,7 +436,7 @@ except NameError:
         return memoryview(sliceable)[offset:]
 
 
-closefds = pycompat.isposix
+closefds = os.name == "posix"
 
 
 def mmapread(fp):
@@ -690,13 +700,7 @@ class sortdict(collections.OrderedDict):
     [b'a', b'b', b'c']
     """
 
-    if pycompat.ispypy:
-        # __setitem__() isn't called as of PyPy 5.8.0
-        def update(self, src):
-            if isinstance(src, dict):
-                src = src.items()
-            for k, v in src:
-                self[k] = v
+    pass
 
 
 class altsortdict(sortdict):
@@ -751,7 +755,7 @@ class cowsortdict(cow, sortdict):
     """
 
 
-class transactional(pycompat.ABC):
+class transactional(abc.ABC):
     """Base class for making a transactional type into a context manager."""
 
     @abc.abstractmethod
@@ -1119,7 +1123,7 @@ def tempfilter(s, cmd):
         cmd = cmd.replace("INFILE", inname)
         cmd = cmd.replace("OUTFILE", outname)
         code = os.system(cmd)
-        if pycompat.sysplatform == "OpenVMS" and code & 1:
+        if sys.platform == "OpenVMS" and code & 1:
             code = 0
         if code:
             raise Abort(_("command '%s' failed: %s") % (cmd, explainexit(code)))
@@ -1197,39 +1201,6 @@ def never(fn):
     return False
 
 
-def _nogc(func):
-    """disable garbage collector
-
-    Python's garbage collector triggers a GC each time a certain number of
-    container objects (the number being defined by gc.get_threshold()) are
-    allocated even when marked not to be tracked by the collector. Tracking has
-    no effect on when GCs are triggered, only on what objects the GC looks
-    into. As a workaround, disable GC while building complex (huge)
-    containers.
-
-    This garbage collector issue have been fixed in 2.7. But it still affect
-    CPython's performance.
-    """
-
-    def wrapper(*args, **kwargs):
-        gcenabled = gc.isenabled()
-        gc.disable()
-        try:
-            return func(*args, **kwargs)
-        finally:
-            if gcenabled:
-                gc.enable()
-
-    return wrapper
-
-
-if pycompat.ispypy:
-    # PyPy runs slower with gc disabled
-    nogc = lambda x: x
-else:
-    nogc = _nogc
-
-
 def pathto(root, n1, n2):
     """return the relative path from one place to another.
     root should use os.sep to separate directories
@@ -1254,7 +1225,7 @@ def pathto(root, n1, n2):
         a.pop()
         b.pop()
     b.reverse()
-    return pycompat.ossep.join(([".."] * len(a)) + b) or "."
+    return os.sep.join(([".."] * len(a)) + b) or "."
 
 
 if "HGDATAPATH" in os.environ:
@@ -1363,7 +1334,7 @@ def rawsystem(cmd, environ=None, cwd=None, out=None):
             out.write(line)
         proc.wait()
         rc = proc.returncode
-    if pycompat.sysplatform == "OpenVMS" and rc & 1:
+    if sys.platform == "OpenVMS" and rc & 1:
         rc = 0
     return rc
 
@@ -1604,9 +1575,9 @@ def fspath(name, root):
     def _makefspathcacheentry(dir):
         return dict((normcase(n), n) for n in os.listdir(dir))
 
-    seps = pycompat.ossep
-    if pycompat.osaltsep:
-        seps = seps + pycompat.osaltsep
+    seps = os.sep
+    if os.altsep:
+        seps = seps + os.altsep
     # Protect backslashes. This gets silly very quickly.
     seps.replace("\\", "\\\\")
     pattern = remod.compile(r"([^%s]+)|([%s]+)" % (seps, seps))
@@ -1682,7 +1653,7 @@ class stringwriter:
         self.fp = fp
 
     def write(self, value: str) -> None:
-        self.fp.write(pycompat.encodeutf8(value))
+        self.fp.write(value.encode())
 
     def writebytes(self, value: bytes) -> None:
         self.fp.write(value)
@@ -1690,11 +1661,7 @@ class stringwriter:
 
 def endswithsep(path):
     """Check path ends with os.sep or os.altsep."""
-    return (
-        path.endswith(pycompat.ossep)
-        or pycompat.osaltsep
-        and path.endswith(pycompat.osaltsep)
-    )
+    return path.endswith(os.sep) or os.altsep and path.endswith(os.altsep)
 
 
 def splitpath(path):
@@ -1703,7 +1670,7 @@ def splitpath(path):
     an alternative of simple "xxx.split(os.sep)".
     It is recommended to use os.path.normpath() before using this
     function if need."""
-    return path.split(pycompat.ossep)
+    return path.split(os.sep)
 
 
 def isvalidutf8(string):
@@ -1732,7 +1699,7 @@ def isvalidutf8(string):
 
 def gui():
     """Are we running in a GUI?"""
-    if pycompat.isdarwin:
+    if isdarwin:
         if "SSH_CONNECTION" in encoding.environ:
             # handle SSH access to a box where the user is logged in
             return False
@@ -1740,7 +1707,7 @@ def gui():
             # pretend that GUI is available
             return True
     else:
-        return pycompat.iswindows or encoding.environ.get("DISPLAY")
+        return iswindows or encoding.environ.get("DISPLAY")
 
 
 def mktempcopy(name, emptyok=False, createmode=None):
@@ -1811,7 +1778,7 @@ def truncatefile(fname, vfs, size, checkambig=False):
 
         return
     except IOError as e:
-        if not pycompat.iswindows:
+        if not iswindows:
             raise
 
         if e.errno != errno.EACCES:
@@ -2056,7 +2023,7 @@ class atomictempfile(BinaryIO):
         return self._fp.write(s)
 
     def writeutf8(self, s: str) -> None:
-        return self.write(encodeutf8(s))
+        return self.write(s.encode())
 
     def writelines(self, lines: "Iterable[bytes]") -> None:
         return self._fp.writelines(lines)
@@ -2119,7 +2086,7 @@ def readfile(path):
 
 
 def readfileutf8(path):
-    return decodeutf8(readfile(path))
+    return readfile(path).decode()
 
 
 def writefile(path, text):
@@ -2291,7 +2258,7 @@ def datestr(date=None, format="%a %b %d %H:%M:%S %Y %1%2"):
     # because they use the gmtime() system call which is buggy on Windows
     # for negative values.
     t = datetime.datetime(1970, 1, 1) + datetime.timedelta(seconds=d)
-    s = encoding.strtolocal(t.strftime(encoding.strfromlocal(format)))
+    s = t.strftime(format)
     return s
 
 
@@ -2351,7 +2318,7 @@ def strdate(string, format, defaults=None):
     # add missing elements from defaults
     usenow = False  # default to using biased defaults
     for part in ("S", "M", "HI", "d", "mb", "yY"):  # decreasing specificity
-        part = pycompat.bytestr(part)
+        part = str(part)
         found = [True for p in part if ("%" + p) in format]
         if not found:
             date += "@" + defaults[part][usenow]
@@ -2361,9 +2328,7 @@ def strdate(string, format, defaults=None):
             # elements are relative to today
             usenow = True
 
-    timetuple = time.strptime(
-        encoding.strfromlocal(date), encoding.strfromlocal(format)
-    )
+    timetuple = time.strptime(date, format)
     localunixtime = int(calendar.timegm(timetuple))
     if offset is None:
         # local timezone
@@ -2499,8 +2464,8 @@ def stringmatcher(pattern, casesensitive=True):
     match = pattern.__eq__
 
     if not casesensitive:
-        ipat = encoding.lower(pattern)
-        match = lambda s: ipat == encoding.lower(s)
+        ipat = pattern.lower()
+        match = lambda s: ipat == s.lower()
     return "literal", pattern, match
 
 
@@ -2673,32 +2638,36 @@ def tocrlf(s):
     return _eolre.sub("\r\n", s)
 
 
-if pycompat.oslinesep == "\r\n":
+def identity(a):
+    return a
+
+
+if os.linesep == "\r\n":
     tonativeeol = tocrlf
     fromnativeeol = tolf
 else:
-    tonativeeol = pycompat.identity
-    fromnativeeol = pycompat.identity
+    tonativeeol = identity
+    fromnativeeol = identity
 
 
 def escapestr(s):
     # call underlying function of s.encode('string_escape') directly for
     # Python 3 compatibility
-    return decodeutf8(codecs.escape_encode(encodeutf8(s, errors="surrogateescape"))[0])
+    return codecs.escape_encode(s.encode(errors="surrogateescape"))[0].decode()
 
 
 def unescapestr(s):
-    return decodeutf8(codecs.escape_decode(s)[0], errors="surrogateescape")
+    return codecs.escape_decode(s)[0].decode(errors="surrogateescape")
 
 
 def forcebytestr(obj):
     """Portably format an arbitrary object (e.g. exception) into a byte
     string."""
     try:
-        return pycompat.bytestr(obj)
+        return str(obj)
     except UnicodeEncodeError:
         # non-ascii string, may be lossy
-        return pycompat.bytestr(encoding.strtolocal(str(obj)))
+        return str(obj)
 
 
 def uirepr(s):
@@ -2845,7 +2814,7 @@ def hgcmd():
     path = encoding.environ.get("HGEXECUTABLEPATH")
     if path:
         return [path]
-    return [pycompat.sysexecutable]
+    return [sys.executable]
 
 
 def rundetached(args, condfn):
@@ -3151,7 +3120,6 @@ class url:
             if v is not None:
                 setattr(self, a, urlreq.unquote(v))
 
-    @encoding.strmethod
     def __repr__(self):
         attrs = []
         for a in (
@@ -3469,9 +3437,9 @@ def debugstacktrace(msg="stacktrace", skip=0, f=stderr, otherf=stdout, depth=0):
     """
     if otherf:
         otherf.flush()
-    f.write(encodeutf8("%s at:\n" % msg.rstrip()))
+    f.write(("%s at:\n" % msg.rstrip()).encode())
     for line in getstackframes(skip + 1, depth=depth):
-        f.write(encodeutf8(line))
+        f.write(line.encode())
     f.flush()
 
 
@@ -4021,7 +3989,7 @@ class _zstdengine(compressionengine):
         level = opts.get("level", 3)
 
         zstd = self._module
-        buf = stringio()
+        buf = io.BytesIO()
         for chunk in it:
             buf.write(chunk)
 
@@ -5073,3 +5041,41 @@ class proxy_wrapper:
         if name.startswith("__") or name in self.__dict__:
             return super().__setattr__(name, value)
         return setattr(self.inner, name, value)
+
+
+def getcwdsafe():
+    """Returns the current working dir, or None if it has been deleted"""
+    try:
+        return os.getcwd()
+    except OSError as err:
+        if err.errno == errno.ENOENT:
+            return None
+        raise
+
+
+def getdoc(obj):
+    """Get docstring as bytes; may be None so gettext() won't confuse it
+    with _('')"""
+    if isinstance(obj, str):
+        return obj
+    doc = getattr(obj, "__doc__", None)
+    return doc
+
+
+def parse_email(fp):
+    # Rarely used, so let's lazy load it
+    import email.parser
+
+    ep = email.parser.Parser()
+    # disable the "universal newlines" mode, which isn't binary safe.
+    # Note, although we specific ascii+surrogateescape decoding here, we don't have
+    # to specify it elsewhere for reencoding as the email.parser detects the
+    # surrogates and automatically chooses the appropriate encoding.
+    # See: https://github.com/python/cpython/blob/3.8/Lib/email/message.py::get_payload()
+    fp = io.TextIOWrapper(
+        fp, encoding=r"ascii", errors=r"surrogateescape", newline=chr(10)
+    )
+    try:
+        return ep.parse(fp)
+    finally:
+        fp.detach()

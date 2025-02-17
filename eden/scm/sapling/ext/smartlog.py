@@ -45,7 +45,6 @@ from sapling import (
     hintutil,
     node as nodemod,
     phases,
-    pycompat,
     registrar,
     revset,
     revsetlang,
@@ -54,9 +53,8 @@ from sapling import (
     util,
 )
 from sapling.i18n import _
-from sapling.pycompat import range
 
-if not pycompat.iswindows:
+if not util.iswindows:
     from . import interactiveui
 else:
     interactiveui = None
@@ -176,7 +174,7 @@ def getdag(ui, repo, revs, masterstring, template):
                 if pctx.ispublic():
                     prev = results[i][0]
                     break
-            if prev:
+            if prev is not None:
                 reserved.append(prev)
 
     return results, reserved

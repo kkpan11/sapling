@@ -17,6 +17,7 @@ import glob
 import os
 import re
 import socket
+import sys
 import tempfile
 import time
 
@@ -29,7 +30,6 @@ from . import (
     match as matchmod,
     pathutil,
     phases,
-    pycompat,
     revsetlang,
     similar,
     smartset,
@@ -40,10 +40,8 @@ from . import (
 )
 from .i18n import _
 from .node import hex, nullid, short, wdirid, wdirrev
-from .pycompat import basestring, isint
 
-
-if pycompat.iswindows:
+if util.iswindows:
     from . import scmwindows as scmplatform
 else:
     from . import scmposix as scmplatform
@@ -213,8 +211,7 @@ def callcatch(ui, req, func):
             ui.warn(_("(lock might be very busy)\n"))
     except error.LockUnavailable as inst:
         ui.warn(
-            _("could not lock %s: %s\n")
-            % (inst.desc or inst.filename, encoding.strtolocal(inst.strerror)),
+            _("could not lock %s: %s\n") % (inst.desc or inst.filename, inst.strerror),
             error=_("abort"),
         )
     except error.OutOfBandError as inst:
@@ -226,15 +223,15 @@ def callcatch(ui, req, func):
         if inst.args:
             ui.warn("".join(inst.args))
         if inst.hint:
-            ui.warn("(%s)\n" % inst.hint)
+            ui.warn("(%s)\n" % inst.hint, label="ui.hint")
     except error.RepoError as inst:
         ui.warn(_("%s!\n") % inst, error=_("abort"))
         inst.printcontext(ui)
         if inst.hint:
-            ui.warn(_("(%s)\n") % inst.hint)
+            ui.warn(_("(%s)\n") % inst.hint, label="ui.hint")
     except error.ResponseError as inst:
         ui.warn(inst.args[0], error=_("abort"))
-        if not isinstance(inst.args[1], basestring):
+        if not isinstance(inst.args[1], str):
             ui.warn(" %r\n" % (inst.args[1],))
         elif not inst.args[1]:
             ui.warn(_(" empty string\n"))
@@ -270,7 +267,7 @@ def callcatch(ui, req, func):
     except error.InterventionRequired as inst:
         ui.warn("%s\n" % inst)
         if inst.hint:
-            ui.warn(_("(%s)\n") % inst.hint)
+            ui.warn(_("(%s)\n") % inst.hint, label="ui.hint")
         return 1
     except error.WdirUnsupported:
         ui.warn(_("working directory revision cannot be specified\n"), error=_("abort"))
@@ -278,7 +275,7 @@ def callcatch(ui, req, func):
         ui.warn(_("%s\n") % inst, error=_("abort"), component=inst.component)
         inst.printcontext(ui)
         if inst.hint:
-            ui.warn(_("(%s)\n") % inst.hint)
+            ui.warn(_("(%s)\n") % inst.hint, label="ui.hint")
         return inst.exitcode
     except (error.IndexedLogError, error.MetaLogError) as inst:
         ui.warn(_("internal storage is corrupted\n"), error=_("abort"))
@@ -311,9 +308,6 @@ def callcatch(ui, req, func):
             except (AttributeError, IndexError):
                 # it might be anything, for example a string
                 reason = inst.reason
-            if isinstance(reason, pycompat.unicode):
-                # SSLError of Python 2.7.9 contains a unicode
-                reason = encoding.unitolocal(reason)
             ui.warn(_("error: %s\n") % reason, error=_("abort"))
         elif (
             not ui.debugflag
@@ -331,14 +325,12 @@ def callcatch(ui, req, func):
             filename = getattr(inst, "filename", None)
             if filename:
                 ui.warn(
-                    _("%s: %s\n") % (encoding.strtolocal(inst.strerror), inst.filename),
+                    _("%s: %s\n") % (inst.strerror, inst.filename),
                     error=_("abort"),
                 )
             else:
-                ui.warn(
-                    _("%s\n") % encoding.strtolocal(inst.strerror), error=_("abort")
-                )
-            if not pycompat.iswindows:
+                ui.warn(_("%s\n") % inst.strerror, error=_("abort"))
+            if not util.iswindows:
                 # For permission errors on POSIX. Show more information about the
                 # current user, group, and stat results.
                 num = getattr(inst, "errno", None)
@@ -355,11 +347,11 @@ def callcatch(ui, req, func):
     except OSError as inst:
         if getattr(inst, "filename", None) is not None:
             ui.warn(
-                _("%s: %s\n") % (encoding.strtolocal(inst.strerror), inst.filename),
+                _("%s: %s\n") % (inst.strerror, inst.filename),
                 error=_("abort"),
             )
         else:
-            ui.warn(_("%s\n") % encoding.strtolocal(inst.strerror), error=_("abort"))
+            ui.warn(_("%s\n") % inst.strerror, error=_("abort"))
     except MemoryError:
         ui.warn(_("out of memory\n"), error=_("abort"))
     except SystemExit as inst:
@@ -470,13 +462,13 @@ class casecollisionauditor:
     def __call__(self, f):
         if f in self._newfiles:
             return
-        fl = encoding.lower(f)
+        fl = f.lower()
         ds = self._dirstate
         shouldwarn = False
         if f not in ds:
             dmap = ds._map
 
-            for candidate in dmap.getfiltered(fl, encoding.lower):
+            for candidate in dmap.getfiltered(fl, str.lower):
                 if candidate == f:
                     continue
                 node = dmap.get(candidate)
@@ -543,7 +535,7 @@ def revsingle(repo, revspec, default=".", localalias=None):
         return repo[default]
 
     # Used by amend/common calling rebase.rebase with non-string opts.
-    if isint(revspec):
+    if isinstance(revspec, int):
         return repo[revspec]
 
     l = revrange(repo, [revspec], localalias=localalias)
@@ -624,7 +616,7 @@ def revrange(repo, specs, localalias=None):
         return specs
     allspecs = []
     for spec in specs:
-        if isint(spec):
+        if isinstance(spec, int):
             # specs are usually strings. int means legacy code using rev
             # numbers. revsetlang no longer accepts int revs. Wrap it before
             # passing to revsetlang.
@@ -1481,7 +1473,7 @@ def trackrevnumfortests(repo, specs):
 
     for spec in specs:
         # 'spec' should be in sys.argv
-        if not any(spec in a for a in pycompat.sysargv):
+        if not any(spec in a for a in sys.argv):
             continue
         # Consider 'spec' as a revision number.
         rev = int(spec)
@@ -1567,15 +1559,19 @@ def rootrelpaths(ctx, paths):
     return [rootrelpath(ctx, path) for path in paths]
 
 
-def walkfiles(repo, walkctx, matcher, base=None):
+def walkfiles(repo, walkctx, matcher, base=None, nodes_only=False):
     """Return a list (path, filenode) pairs that match the matcher in the given context."""
     mf = walkctx.manifest()
     if base is None and hasattr(mf, "walkfiles"):
         # If there is no base, skip diff and use more efficient walk.
-        return mf.walkfiles(matcher)
+        return mf.walkfiles(matcher, nodes_only=nodes_only)
     else:
         basemf = repo[base or nullid].manifest()
-        return [(p, n[0]) for p, (n, _o) in mf.diff(basemf, matcher).items() if n[0]]
+        return [
+            (p, n[0])
+            for p, (n, _o) in mf.diff(basemf, matcher, nodes_only=nodes_only).items()
+            if n[0]
+        ]
 
 
 def publicbase(repo, ctx):

@@ -59,9 +59,10 @@ blobimport
 
   $ export COMMIT_DATE="1985-09-04T00:00:00.00Z"
 move things in fbsource
-  $ RUST_BACKTRACE=1 megarepo_tool move 1 fbsource_master user "fbsource move" --mark-public --commit-date-rfc3339 "$COMMIT_DATE" --bookmark fbsource_move --mapping-version-name TEST_VERSION_NAME
-  * using repo "repo" repoid RepositoryId(0) (glob)
-  * changeset resolved as: * (glob)
+  $ RUST_BACKTRACE=1 mononoke_admin megarepo move-commit --repo-id 0 \
+  > --source-repo-id 1 -B fbsource_master -a user -m "fbsource move" \
+  > --mark-public --commit-date-rfc3339 "$COMMIT_DATE" \
+  > --set-bookmark fbsource_move --mapping-version-name TEST_VERSION_NAME
   * Marked as public * (glob)
   * Setting bookmark * "fbsource_move" * to point to * (glob)
   * Setting bookmark * "fbsource_move" * finished (glob)
@@ -69,9 +70,10 @@ move things in fbsource
   * Hg equivalent of *: HgChangesetId(HgNodeHash(Sha1(*))) (glob)
 
 move things in ovrsource in a stack
-  $ megarepo_tool move 2 ovrsource_master user "ovrsource stack move" --mark-public --commit-date-rfc3339 "$COMMIT_DATE" --max-num-of-moves-in-commit 1 --bookmark ovrsource_move --mapping-version-name TEST_VERSION_NAME
-  * using repo "repo" repoid RepositoryId(0) (glob)
-  * changeset resolved as: * (glob)
+  $ mononoke_admin megarepo move-commit --repo-id 0 --source-repo-id 2 \
+  > -B ovrsource_master -a user -m "ovrsource stack move" --mark-public \
+  >  --commit-date-rfc3339 "$COMMIT_DATE" --max-num-of-moves-in-commit 1 \
+  > --set-bookmark ovrsource_move --mapping-version-name TEST_VERSION_NAME
   * Marked as public * (glob)
   * Setting bookmark * "ovrsource_move" * to point to * (glob)
   * Setting bookmark * "ovrsource_move" * finished (glob)
@@ -110,10 +112,9 @@ move things in ovrsource in a stack
   * created 7 commits, with the last commit * (glob)
 
 merge things in both repos
-  $ megarepo_tool merge fbsource_move ovrsource_move user "megarepo merge" --mark-public --commit-date-rfc3339 "$COMMIT_DATE" --bookmark master_bookmark
-  * using repo "repo" repoid RepositoryId(0) (glob)
-  * changeset resolved as: * (glob)
-  * changeset resolved as: * (glob)
+  $ mononoke_admin megarepo merge --repo-id 0 -B fbsource_move  \
+  > -B ovrsource_move -a user -m "megarepo merge" --mark-public  \
+  > --commit-date-rfc3339 "$COMMIT_DATE" --set-bookmark master_bookmark
   * Creating a merge commit (glob)
   * Checking if there are any path conflicts (glob)
   * Done checking path conflicts (glob)

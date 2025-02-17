@@ -33,7 +33,6 @@ use futures::StreamExt;
 use futures_stats::TimedTryFutureExt;
 use git_types::MappedGitCommitId;
 use git_types::RootGitDeltaManifestV2Id;
-use git_types::TreeHandle;
 use indicatif::ProgressBar;
 use indicatif::ProgressStyle;
 use maplit::hashmap;
@@ -47,6 +46,7 @@ use mononoke_api::MononokeError;
 use mononoke_api::MononokeRepo;
 use mononoke_api::Repo;
 use mononoke_api::RepoContext;
+use mononoke_macros::mononoke;
 use mononoke_types::BonsaiChangeset;
 use mononoke_types::ChangesetId;
 use mononoke_types::FileChange;
@@ -60,11 +60,9 @@ use slog::debug;
 use slog::info;
 use slog::trace;
 use slog::warn;
-use slog::Drain;
 use slog::Logger;
 use sql::rusqlite::Connection as SqliteConnection;
 use test_repo_factory::TestRepoFactory;
-use tokio::task;
 use unodes::RootUnodeManifestId;
 use warm_bookmarks_cache::NoopBookmarksCache;
 
@@ -127,7 +125,7 @@ pub async fn rewrite_partial_changesets<R: MononokeRepo>(
 
             let blobstore = source_repo_ctx.repo().repo_blobstore_arc();
             async move {
-                task::spawn(async move {
+                mononoke::spawn_task(async move {
                     let ctx = source_repo_ctx.ctx();
                     let export_paths = get_export_paths_for_changeset(&cs, &export_paths).await?;
                     let bcs = cs
@@ -559,7 +557,6 @@ async fn create_temp_repo(fb: FacebookInit, ctx: &CoreContext) -> Result<RepoCon
         types: hashset! {
             ChangesetInfo::VARIANT,
             MappedGitCommitId::VARIANT,
-            TreeHandle::VARIANT,
             RootGitDeltaManifestV2Id::VARIANT,
             RootUnodeManifestId::VARIANT,
         },
@@ -570,13 +567,13 @@ async fn create_temp_repo(fb: FacebookInit, ctx: &CoreContext) -> Result<RepoCon
         }),
         ..Default::default()
     };
-
     let available_configs = hashmap! {
         "default".to_string() => derived_data_types_config.clone(),
     };
     let mut factory = TestRepoFactory::with_sqlite_connection(fb, metadata_conn, hg_mutation_conn)?;
     factory
         .with_blobstore(file_blobstore)
+        .with_cacheless_git_symbolic_refs()
         .with_core_context_that_does_not_override_logger(ctx.clone())
         .with_name(temp_repo_name)
         .with_config_override(|cfg| {

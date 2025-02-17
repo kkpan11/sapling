@@ -9,9 +9,8 @@ import contextlib
 import errno
 import subprocess
 
-from sapling import error, json, lock as lockmod, node as nodemod, pycompat, util
+from sapling import error, json, lock as lockmod, node as nodemod, util
 from sapling.i18n import _
-
 
 lockfilename = "infinitepushbackup.lock"
 
@@ -33,7 +32,7 @@ progressfilename = "commitcloudsyncprogress"
 def progress(repo, step, **kwargs):
     with repo.sharedvfs.open(progressfilename, "wb", atomictemp=True) as f:
         data = {"step": str(step), "data": kwargs}
-        f.write(pycompat.encodeutf8(json.dumps(data)))
+        f.write(json.dumps(data).encode())
 
 
 def progressbackingup(repo, nodes):
@@ -73,7 +72,7 @@ def _getprocessetime(locker):
     holding the lock
     """
     # TODO: support windows
-    if not pycompat.isposix:
+    if not util.isposix:
         return None
     if not locker.pid or not locker.issamenamespace():
         return None

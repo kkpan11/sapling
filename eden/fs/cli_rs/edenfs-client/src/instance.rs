@@ -13,7 +13,6 @@ use std::collections::BTreeMap;
 use std::fs::remove_file;
 use std::path::Path;
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::OnceLock;
 use std::time::Duration;
 use std::time::Instant;
@@ -32,9 +31,11 @@ use edenfs_utils::strip_unc_prefix;
 #[cfg(fbcode_build)]
 use fbinit::expect_init;
 use fbthrift_socket::SocketTransport;
+use futures::stream::BoxStream;
 use futures::StreamExt;
 #[cfg(fbcode_build)]
 use thrift_streaming_clients::errors::StreamStartStatusError;
+use thrift_streaming_clients::errors::SubscribeStreamTemporaryError;
 #[cfg(fbcode_build)]
 use thrift_streaming_thriftclients::build_StreamingEdenService_client;
 #[cfg(fbcode_build)]
@@ -45,6 +46,10 @@ use thrift_types::edenfs::GetCurrentSnapshotInfoRequest;
 use thrift_types::edenfs::GetScmStatusParams;
 use thrift_types::edenfs::GlobParams;
 use thrift_types::edenfs::MountId;
+#[cfg(target_os = "macos")]
+use thrift_types::edenfs::StartFileAccessMonitorParams;
+use thrift_types::edenfs::UnmountArgument;
+use thrift_types::edenfs_clients::errors::UnmountV2Error;
 use thrift_types::edenfs_clients::EdenService;
 use thrift_types::fb303_core::fb303_status;
 use thrift_types::fbthrift::binary_protocol::BinaryProtocol;
@@ -59,6 +64,8 @@ use tracing::event;
 use tracing::Level;
 use util::lock::PathLock;
 
+use crate::types::ChangesSinceV2Result;
+use crate::types::JournalPosition;
 use crate::utils::get_mount_point;
 use crate::EdenFsClient;
 #[cfg(fbcode_build)]
@@ -327,54 +334,87 @@ impl EdenFsInstance {
             .from_err()
     }
 
-    pub async fn subscribe(
+    pub async fn stream_journal_changed(
         &self,
-        mount_point: &Vec<u8>,
-        throttle_time_ms: u64,
-        guard_time_s: u64,
-        notify: Arc<tokio::sync::Notify>,
-    ) -> Result<(), anyhow::Error> {
+        mount_point: &Option<PathBuf>,
+    ) -> Result<
+        BoxStream<
+            'static,
+            Result<thrift_types::edenfs::JournalPosition, SubscribeStreamTemporaryError>,
+        >,
+        EdenFsError,
+    > {
+        let mount_point_vec = bytes_from_path(get_mount_point(mount_point)?)?;
         let stream_client = self
             .connect_streaming(None)
             .await
             .with_context(|| anyhow!("unable to establish Thrift connection to EdenFS server"))?;
 
-        // TODO: feels weird that this method accepts a `&Vec<u8>` instead of a `&[u8]`.
-        let mut subscription = stream_client.streamJournalChanged(mount_point).await?;
-        let mount_point_string =
-            String::from_utf8(mount_point.to_vec()).expect("Found invalid UTF-8");
-        tracing::info!(?mount_point_string, "subscription created");
+        stream_client
+            .streamJournalChanged(&mount_point_vec)
+            .await
+            .from_err()
+    }
+
+    pub async fn subscribe(
+        &self,
+        mount_point: &Option<PathBuf>,
+        throttle_time_ms: u64,
+        position: Option<JournalPosition>,
+        include_vcs_roots: bool,
+        included_roots: &Option<Vec<PathBuf>>,
+        excluded_roots: &Option<Vec<PathBuf>>,
+        included_suffixes: &Option<Vec<String>>,
+        excluded_suffixes: &Option<Vec<String>>,
+        handle_results: impl Fn(&ChangesSinceV2Result) -> Result<(), EdenFsError>,
+    ) -> Result<(), anyhow::Error> {
+        let mut position = position.unwrap_or(self.get_journal_position(mount_point, None).await?);
+        let mut subscription = self.stream_journal_changed(mount_point).await?;
 
         let mut last = Instant::now();
         let throttle = Duration::from_millis(throttle_time_ms);
-        // streamJournalChanged requires a call to `getCurrentJournalPosition` in response to a subscription in order to
-        // ensure future updates. We have this guard timer to
-        // call every `guard_time_s` to make sure we get event from EdenFS.
-        let mut guard = time::interval(Duration::from_secs(guard_time_s));
+
+        let mut pending_updates = false;
+
+        // Largest allowed sleep value  https://docs.rs/tokio/latest/tokio/time/fn.sleep.html
+        let sleep_max = Duration::from_millis(68719476734);
+        let timer = time::sleep(sleep_max);
+        tokio::pin!(timer);
 
         loop {
             tokio::select! {
-                // when we get a notification from EdenFS subscription
+                // Wait on the following cases
+                // 1. The we get a notification from the subscription
+                // 2. The pending updates timer expires
+                // 3. Another signal is recieved
                 result = subscription.next() => {
                     match result {
-                        // if the stream is ended somehow, we terminates as well
+                        // if the stream is ended somehow, we terminate as well
                         None => break,
-                        // if there is any error happened during the stream, log them
+                        // if any error happened during the stream, log them
                         Some(Err(e)) => {
                             tracing::error!(?e, "error while processing subscription");
                             continue;
                         },
-                        // otherwise, trigger an event if we haven't sent one in the last 500ms (or other configured throttle limit)
+                        // If we have recently(within throttle ms) sent an update, set a
+                        // timer to check again when throttle time is up if we aren't already
+                        // waiting on a timer
                         Some(Ok(_)) => {
-                            if last.elapsed() < throttle {
+                            if last.elapsed() < throttle && !pending_updates {
+                                // set timer to check again when throttle time is up
+                                pending_updates = true;
+                                timer.as_mut().reset((Instant::now() + throttle).into());
                                 continue;
                             }
                         }
                     }
                 },
-                // if the guard timer triggers, trigger an event if it's not under throttling
-                _ = guard.tick() => {
-                    if last.elapsed() < throttle {
+                // Pending updates timer expired. If we haven't gotten a subscription notification in
+                // the meantime, check for updates now. Set the timer back to the max value in either case.
+                () = &mut timer => {
+                    // Set timer to the maximum value to prevent repeated wakeups since timers are not consumed
+                    timer.as_mut().reset((Instant::now() + sleep_max).into());
+                    if !pending_updates {
                         continue;
                     }
                 },
@@ -382,7 +422,34 @@ impl EdenFsInstance {
                 else => break,
             }
 
-            notify.notify_one();
+            let result = self
+                .get_changes_since(
+                    mount_point,
+                    &position,
+                    include_vcs_roots,
+                    included_roots,
+                    excluded_roots,
+                    included_suffixes,
+                    excluded_suffixes,
+                    None,
+                )
+                .await
+                .map_err(anyhow::Error::msg)?;
+
+            tracing::debug!(
+                "got {} changes for position {}",
+                result.changes.len(),
+                result.to_position
+            );
+
+            if !result.changes.is_empty() {
+                // Error in handle results will terminate the loop
+                handle_results(&result)?;
+            }
+
+            pending_updates = false;
+            position = result.to_position;
+
             last = Instant::now();
         }
 
@@ -499,17 +566,47 @@ impl EdenFsInstance {
         Ok(())
     }
 
-    pub async fn unmount(&self, path: &Path) -> Result<()> {
+    pub async fn unmount(&self, path: &Path, no_force: bool) -> Result<()> {
         let client = self.get_connected_thrift_client(None).await?;
 
         let encoded_path = bytes_from_path(path.to_path_buf())
             .with_context(|| format!("Failed to encode path {}", path.display()))?;
 
-        client
-            .unmount(&encoded_path)
-            .await
-            .with_context(|| format!("Failed to unmount {}", path.display()))?;
-        Ok(())
+        let unmount_argument = UnmountArgument {
+            mountId: MountId {
+                mountPoint: encoded_path,
+                ..Default::default()
+            },
+            useForce: !no_force,
+            ..Default::default()
+        };
+        match client.unmountV2(&unmount_argument).await {
+            Ok(_) => Ok(()),
+            Err(UnmountV2Error::ApplicationException(ref e)) => {
+                if e.type_ == ApplicationExceptionErrorCode::UnknownMethod {
+                    let encoded_path = bytes_from_path(path.to_path_buf())
+                        .with_context(|| format!("Failed to encode path {}", path.display()))?;
+                    client.unmount(&encoded_path).await.with_context(|| {
+                        format!(
+                            "Failed to unmount (legacy Thrift unmount endpoint) {}",
+                            path.display()
+                        )
+                    })?;
+                    Ok(())
+                } else {
+                    Err(EdenFsError::Other(anyhow!(
+                        "Failed to unmount (Thrift unmountV2 endpoint) {}: {}",
+                        path.display(),
+                        e
+                    )))
+                }
+            }
+            Err(e) => Err(EdenFsError::Other(anyhow!(
+                "Failed to unmount (Thrift unmountV2 endpoint) {}: {}",
+                path.display(),
+                e
+            ))),
+        }
     }
 
     pub async fn get_current_snapshot_info(
@@ -717,6 +814,44 @@ impl EdenFsInstance {
             .getRegexCounters(arg_regex)
             .await
             .map_err(|_| EdenFsError::Other(anyhow!("failed to get regex counters")))
+    }
+
+    #[cfg(target_os = "macos")]
+    pub async fn start_file_access_monitor(
+        &self,
+        path_prefix: &Vec<PathBuf>,
+        specified_output_file: Option<PathBuf>,
+        should_upload: bool,
+    ) -> Result<thrift_types::edenfs::StartFileAccessMonitorResult> {
+        let client = self.get_connected_thrift_client(None).await?;
+        let mut paths = Vec::new();
+        for path in path_prefix {
+            let path = bytes_from_path(path.to_path_buf())?;
+            paths.push(path);
+        }
+        client
+            .startFileAccessMonitor(&StartFileAccessMonitorParams {
+                paths,
+                specifiedOutputPath: match specified_output_file {
+                    Some(path) => Some(bytes_from_path(path.to_path_buf())?),
+                    None => None,
+                },
+                shouldUpload: should_upload,
+                ..Default::default()
+            })
+            .await
+            .map_err(|e| EdenFsError::Other(anyhow!("failed to start file access monitor: {}", e)))
+    }
+
+    #[cfg(target_os = "macos")]
+    pub async fn stop_file_access_monitor(
+        &self,
+    ) -> Result<thrift_types::edenfs::StopFileAccessMonitorResult> {
+        let client = self.get_connected_thrift_client(None).await?;
+        client
+            .stopFileAccessMonitor()
+            .await
+            .map_err(|e| EdenFsError::Other(anyhow!("failed to stop file access monitor: {}", e)))
     }
 
     pub async fn get_connected_thrift_client(

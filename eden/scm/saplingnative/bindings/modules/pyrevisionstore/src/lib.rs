@@ -25,11 +25,14 @@ use cpython_ext::PyPath;
 use cpython_ext::PyPathBuf;
 use cpython_ext::ResultPyErrExt;
 use pyconfigloader::config;
+use pythonutil::key_error;
+use pythonutil::to_key;
 use pythonutil::to_node;
 use revisionstore::scmstore::FileAttributes;
 use revisionstore::scmstore::FileStore;
 use revisionstore::scmstore::TreeStore;
 use revisionstore::scmstore::TreeStoreBuilder;
+use revisionstore::ContentHash;
 use revisionstore::Delta;
 use revisionstore::HgIdDataStore;
 use revisionstore::HgIdHistoryStore;
@@ -53,7 +56,6 @@ use types::fetch_mode::FetchMode;
 use types::Key;
 use types::NodeInfo;
 
-use crate::datastorepyext::ContentDataStorePyExt;
 use crate::datastorepyext::HgIdDataStorePyExt;
 use crate::datastorepyext::HgIdMutableDeltaStorePyExt;
 use crate::datastorepyext::IterableHgIdDataStorePyExt;
@@ -159,11 +161,6 @@ py_class!(class indexedlogdatastore |py| {
         store.get_delta_chain_py(py, name, node)
     }
 
-    def getmeta(&self, name: &PyPath, node: &PyBytes) -> PyResult<PyDict> {
-        let store = self.store(py);
-        store.get_meta_py(py, name, node)
-    }
-
     def getmissing(&self, keys: &PyObject) -> PyResult<PyList> {
         let store = self.store(py);
         store.get_missing_py(py, &mut keys.iter(py)?)
@@ -260,11 +257,6 @@ py_class!(pub class mutabledeltastore |py| {
         store.get_delta_chain_py(py, &name, node)
     }
 
-    def getmeta(&self, name: PyPathBuf, node: &PyBytes) -> PyResult<PyDict> {
-        let store = self.store(py);
-        store.get_meta_py(py, &name, node)
-    }
-
     def getmissing(&self, keys: &PyObject) -> PyResult<PyList> {
         let store = self.store(py);
         store.get_missing_py(py, &mut keys.iter(py)?)
@@ -285,13 +277,6 @@ impl HgIdDataStore for mutabledeltastore {
         let py = gil.python();
 
         self.store(py).get(key)
-    }
-
-    fn get_meta(&self, key: StoreKey) -> Result<StoreResult<Metadata>> {
-        let gil = Python::acquire_gil();
-        let py = gil.python();
-
-        self.store(py).get_meta(key)
     }
 
     fn refresh(&self) -> Result<()> {
@@ -582,11 +567,6 @@ py_class!(pub class filescmstore |py| {
         store.get_delta_chain_py(py, &name, node)
     }
 
-    def getmeta(&self, name: PyPathBuf, node: &PyBytes) -> PyResult<PyDict> {
-        let store = self.store(py);
-        store.get_meta_py(py, &name, node)
-    }
-
     def getmissing(&self, keys: &PyObject) -> PyResult<PyList> {
         let store = self.store(py);
         store.get_missing_py(py, &mut keys.iter(py)?)
@@ -642,15 +622,29 @@ py_class!(pub class filescmstore |py| {
         Ok(results)
     }
 
-    def blob(&self, name: &PyPath, node: &PyBytes) -> PyResult<PyBytes> {
-        let store = self.store(py);
-        store.blob_py(py, name, node)
-    }
 
     def metadata(&self, name: &PyPath, node: &PyBytes) -> PyResult<PyDict> {
+        let key = StoreKey::hgid(to_key(py, name, node)?);
         let store = self.store(py);
-        store.metadata_py(py, name, node)
+        let res = py.allow_threads(|| store.metadata(key)).map_pyerr(py)?;
+
+        let meta = match res {
+            StoreResult::Found(meta) => meta,
+            StoreResult::NotFound(key) => return Err(key_error(py, &key)),
+        };
+
+        let metadict = PyDict::new(py);
+        metadict.set_item(py, "size", meta.size)?;
+        match meta.hash {
+            ContentHash::Sha256(hash) => {
+                metadict.set_item(py, "sha256", PyBytes::new(py, hash.as_ref()))?
+            }
+        }
+        metadict.set_item(py, "isbinary", meta.is_binary)?;
+
+        Ok(metadict)
     }
+
 
     def getmetrics(&self) -> PyResult<Vec<PyTuple>> {
         let store = self.store(py);
@@ -772,11 +766,6 @@ py_class!(pub class treescmstore |py| {
         store.get_delta_chain_py(py, &name, node)
     }
 
-    def getmeta(&self, name: PyPathBuf, node: &PyBytes) -> PyResult<PyDict> {
-        let store = self.store(py);
-        store.get_meta_py(py, &name, node)
-    }
-
     def getmissing(&self, keys: &PyObject) -> PyResult<PyList> {
         let store = self.store(py);
         HgIdDataStorePyExt::get_missing_py(store, py, &mut keys.iter(py)?)
@@ -816,16 +805,6 @@ py_class!(pub class treescmstore |py| {
     def markforrefresh(&self) -> PyResult<PyNone> {
         let store = self.store(py);
         HgIdDataStorePyExt::refresh_py(store, py)
-    }
-
-    def blob(&self, name: &PyPath, node: &PyBytes) -> PyResult<PyBytes> {
-        let store = self.store(py);
-        store.blob_py(py, name, node)
-    }
-
-    def metadata(&self, name: &PyPath, node: &PyBytes) -> PyResult<PyDict> {
-        let store = self.store(py);
-        store.metadata_py(py, name, node)
     }
 
     def getsharedmutable(&self) -> PyResult<Self> {

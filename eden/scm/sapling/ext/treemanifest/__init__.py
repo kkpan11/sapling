@@ -76,9 +76,7 @@ from sapling import (
     localrepo,
     mdiff,
     perftrace,
-    phases,
     progress,
-    pycompat,
     registrar,
     repair,
     revlog,
@@ -93,7 +91,6 @@ from sapling import (
 from sapling.commands import debug as debugcommands
 from sapling.i18n import _
 from sapling.node import bin, hex, nullid, short
-from sapling.pycompat import range
 
 from ..remotefilelog import (
     cmdtable as remotefilelogcmdtable,
@@ -107,12 +104,6 @@ from ..remotefilelog.contentstore import unioncontentstore
 from ..remotefilelog.datapack import memdatapack
 from ..remotefilelog.historypack import memhistorypack
 from ..remotefilelog.metadatastore import unionmetadatastore
-
-try:
-    from itertools import zip_longest
-except ImportError:
-    # pyre-fixme[21]: Could not find name `izip_longest` in `itertools`.
-    from itertools import izip_longest as zip_longest
 
 
 cmdtable = {}
@@ -1569,7 +1560,7 @@ class nodeinfoserializer:
     @staticmethod
     def serialize(value):
         p1, p2, linknode, copyfrom = value
-        copyfrom = pycompat.encodeutf8(copyfrom if copyfrom else "")
+        copyfrom = (copyfrom if copyfrom else "").encode()
         return struct.pack(NODEINFOFORMAT, p1, p2, linknode, len(copyfrom)) + copyfrom
 
     @staticmethod
@@ -1584,7 +1575,7 @@ class nodeinfoserializer:
             p1,
             p2,
             linknode,
-            pycompat.decodeutf8(raw[NODEINFOLEN : NODEINFOLEN + copyfromlen]),
+            raw[NODEINFOLEN : NODEINFOLEN + copyfromlen].decode(),
         )
 
 
@@ -1592,7 +1583,7 @@ class cachestoreserializer:
     """Simple serializer that attaches key and sha1 to the content"""
 
     def __init__(self, key):
-        self.key = pycompat.encodeutf8(key)
+        self.key = key.encode()
 
     def serialize(self, value):
         sha = hashlib.sha1(value).digest()

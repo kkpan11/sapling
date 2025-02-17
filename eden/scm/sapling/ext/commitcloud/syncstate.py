@@ -8,11 +8,6 @@ from __future__ import absolute_import
 import json
 import time
 
-from sapling.pycompat import encodeutf8, ensurestr
-
-from . import error as ccerror
-
-
 NOTSET = object()
 
 
@@ -70,22 +65,13 @@ class SyncState:
         data = states.get(workspacename)
         if data is not None:
             self.version = data["version"]
-            self.heads = [ensurestr(h) for h in data["heads"]]
-            self.bookmarks = {
-                ensurestr(n): ensurestr(v) for n, v in data["bookmarks"].items()
-            }
-            self.remotebookmarks = {
-                ensurestr(n): ensurestr(v)
-                for n, v in data.get("remotebookmarks", {}).items()
-            }
+            self.heads = data["heads"]
+            self.bookmarks = data["bookmarks"]
+            self.remotebookmarks = data.get("remotebookmarks", {})
             self.maxage = data.get("maxage", None)
-            self.omittedheads = [ensurestr(h) for h in data.get("omittedheads", ())]
-            self.omittedbookmarks = [
-                ensurestr(n) for n in data.get("omittedbookmarks", ())
-            ]
-            self.omittedremotebookmarks = [
-                ensurestr(n) for n in data.get("omittedremotebookmarks", ())
-            ]
+            self.omittedheads = data.get("omittedheads", [])
+            self.omittedbookmarks = data.get("omittedbookmarks", [])
+            self.omittedremotebookmarks = data.get("omittedremotebookmarks", [])
             self.lastupdatetime = data.get("lastupdatetime", None)
         else:
             self.version = 0
@@ -140,7 +126,7 @@ class SyncState:
         tr.addfilegenerator(
             self.v2filename,
             [self.v2filename],
-            lambda f, states=states: f.write(encodeutf8(json.dumps(states))),
+            lambda f, states=states: f.write(json.dumps(states).encode()),
         )
         self.prevstate = (self.version, self.heads, self.bookmarks)
         self.version = version

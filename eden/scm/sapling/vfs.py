@@ -15,6 +15,7 @@ import abc
 import contextlib
 import errno
 import os
+import queue as queuemod
 import re
 import shutil
 import stat
@@ -34,9 +35,8 @@ from typing import (
     Union,
 )
 
-from . import encoding, error, pathutil, pycompat, util
+from . import encoding, error, pathutil, util
 from .i18n import _
-from .pycompat import decodeutf8, encodeutf8
 
 
 def _avoidambig(path, oldstat):
@@ -58,7 +58,7 @@ def _avoidambig(path, oldstat):
         checkandavoid()
 
 
-class abstractvfs(pycompat.ABC):
+class abstractvfs(abc.ABC):
     """Abstract base class; cannot be instantiated"""
 
     _backgroundfilecloser: "Optional[backgroundfilecloser]" = None
@@ -95,7 +95,7 @@ class abstractvfs(pycompat.ABC):
         return b""
 
     def tryreadutf8(self, path):
-        return decodeutf8(self.tryread(path))
+        return self.tryread(path).decode()
 
     def tryreadlines(self, path, mode="rb"):
         """gracefully return an empty array for missing files"""
@@ -123,7 +123,7 @@ class abstractvfs(pycompat.ABC):
             return fp.read()
 
     def readutf8(self, path: str) -> str:
-        return decodeutf8(self.read(path))
+        return self.read(path).decode()
 
     def readlines(self, path: str, mode: str = "rb") -> "List[bytes]":
         with self(path, mode=mode) as fp:
@@ -134,7 +134,7 @@ class abstractvfs(pycompat.ABC):
             return fp.write(data)
 
     def writeutf8(self, path: str, data: str) -> None:
-        self.write(path, encodeutf8(data))
+        self.write(path, data.encode())
 
     def writelines(
         self, path: str, data: "List[bytes]", mode: str = "wb", notindexed: bool = False
@@ -562,8 +562,7 @@ class vfs(abstractvfs):
             except OSError as err:
                 raise OSError(
                     err.errno,
-                    _("could not symlink to %r: %s")
-                    % (src, encoding.strtolocal(err.strerror)),
+                    _("could not symlink to %r: %s") % (src, err.strerror),
                     linkname,
                 )
         else:
@@ -652,7 +651,7 @@ class backgroundfilecloser:
 
         # Only Windows/NTFS has slow file closing. So only enable by default
         # on that platform. But allow to be enabled elsewhere for testing.
-        defaultenabled = pycompat.iswindows
+        defaultenabled = util.iswindows
         enabled = ui.configbool("worker", "backgroundclose", defaultenabled)
 
         if not enabled:
@@ -670,7 +669,7 @@ class backgroundfilecloser:
         maxqueue = ui.configint("worker", "backgroundclosemaxqueue")
         threadcount = ui.configint("worker", "backgroundclosethreadcount")
 
-        self._queue = util.queue(maxsize=maxqueue)
+        self._queue = queuemod.Queue(maxsize=maxqueue)
         self._running = True
 
         for i in range(threadcount):
@@ -702,7 +701,7 @@ class backgroundfilecloser:
                 except Exception as e:
                     # Stash so can re-raise from main thread later.
                     self._threadexception = e
-            except util.empty:
+            except queuemod.Empty:
                 if not self._running:
                     break
 

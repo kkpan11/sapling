@@ -239,11 +239,11 @@ def hg(stdin: BinaryIO, stdout: BinaryIO, stderr: BinaryIO, env: Env) -> int:
 
     import bindings
 
-    from sapling import encoding, extensions, pycompat, util
+    from sapling import encoding, extensions, util
 
     # emulate ui.system via sheval
     rawsystem = partial(_rawsystem, env, stdin, stdout, stderr)
-    origstdio = (pycompat.stdin, pycompat.stdout, pycompat.stderr)
+    origstdio = (util.stdin, util.stdout, util.stderr)
 
     # bindings.commands.run might keep the stdio strems to prevent
     # file delection (for example, if stdout redirects to a file).
@@ -266,10 +266,10 @@ def hg(stdin: BinaryIO, stdout: BinaryIO, stderr: BinaryIO, env: Env) -> int:
             bindings.hgmetrics.reset()
 
             encoding.setfromenviron()
-            pycompat.stdin = stdin
-            pycompat.stdout = stdout
-            pycompat.stderr = stderr
-            pycompat.sysargv = env.args
+            util.stdin = stdin
+            util.stdout = stdout
+            util.stderr = stderr
+            sys.argv = env.args
             util._reloadenv()
             exitcode = bindings.commands.run(env.args, stdin, stdout, stderr)
             bindings.atexit.drop_queued()
@@ -290,7 +290,7 @@ def hg(stdin: BinaryIO, stdout: BinaryIO, stderr: BinaryIO, env: Env) -> int:
             bindings.blackbox.reset()
         # restore environ
         encoding.setfromenviron()
-        pycompat.stdin, pycompat.stdout, pycompat.stderr = origstdio
+        util.stdin, util.stdout, util.stderr = origstdio
 
 
 def _setupmodernclient(t: TestTmp):

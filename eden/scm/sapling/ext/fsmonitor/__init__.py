@@ -166,11 +166,10 @@ from __future__ import absolute_import
 
 import os
 
-from sapling import error, extensions, filesystem, localrepo, pycompat, registrar, util
+from sapling import error, extensions, filesystem, localrepo, registrar, util
 from sapling.i18n import _
 
 from ..extlib import watchmanclient
-
 
 # Note for extension authors: ONLY specify testedwith = 'ships-with-hg-core' for
 # extensions which SHIP WITH MERCURIAL. Non-mainline extensions should
@@ -241,7 +240,7 @@ def _isutf8(ui, name):
         # Passing it along to the rest of Mercurial can cause issues
         # since the Python-to-Rust boundary doesn't support
         # surrogate escaped strings.
-        name = pycompat.decodeutf8(pycompat.encodeutf8(name, errors="replace"))
+        name = name.encode(errors="replace").decode()
         ui.warn(_("skipping invalid utf-8 filename: '%s'\n") % name)
         return False
     return True
@@ -309,7 +308,7 @@ def wrapdirstate(orig, self):
 
 def extsetup(ui):
     extensions.wrapfilecache(localrepo.localrepository, "dirstate", wrapdirstate)
-    if pycompat.isdarwin:
+    if util.isdarwin:
         # An assist for avoiding the dangling-symlink fsevents bug
         extensions.wrapfunction(os, "symlink", wrapsymlink)
 

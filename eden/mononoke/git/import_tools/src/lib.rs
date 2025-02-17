@@ -16,7 +16,6 @@ mod gitlfs;
 
 use std::collections::BTreeMap;
 use std::collections::HashMap;
-use std::collections::HashSet;
 use std::path::Path;
 use std::process::Stdio;
 use std::str;
@@ -32,6 +31,7 @@ use anyhow::Result;
 use bytes::Bytes;
 use cloned::cloned;
 use context::CoreContext;
+use futures::future::try_join3;
 use futures::future::BoxFuture;
 use futures::stream;
 use futures::try_join;
@@ -47,8 +47,9 @@ use gix_hash::ObjectId;
 use gix_object::Kind;
 use gix_object::Object;
 use linked_hash_map::LinkedHashMap;
-use manifest::bonsai_diff;
+use manifest::find_intersection_of_diffs;
 use manifest::BonsaiDiffFileChange;
+use mononoke_macros::mononoke;
 use mononoke_types::ChangesetId;
 use mononoke_types::FileType;
 use mononoke_types::NonRootMPath;
@@ -60,7 +61,6 @@ use tokio::io::AsyncBufReadExt;
 use tokio::io::BufReader;
 use tokio::process::Command;
 use tokio::sync::mpsc;
-use tokio::task;
 
 pub use crate::bookmark::set_bookmark;
 pub use crate::bookmark::BookmarkOperation;
@@ -104,7 +104,7 @@ where
     changes
         .map_ok(|change| async {
             cloned!(ctx, reader, uploader, lfs);
-            task::spawn({
+            mononoke::spawn_task({
                 async move {
                     match change {
                         BonsaiDiffFileChange::Changed(path, (ty, GitLeaf(oid)))
@@ -287,21 +287,16 @@ pub async fn upload_git_tree_recursively<Uploader: GitUploader, Reader: GitReade
     upload_git_object(ctx, uploader.clone(), reader.clone(), tree_id).await?;
     let tree = GitTree::<true>(*tree_id);
     // Then upload all subtrees and blobs within it
-    bonsai_diff(ctx.clone(), reader.clone(), tree, HashSet::new())
-        .map_ok(|diff| {
-            cloned!(ctx, uploader, reader);
+    find_intersection_of_diffs(ctx.clone(), reader.clone(), tree, vec![])
+        .map_ok(|(_, entry)| {
+            cloned!(uploader, reader);
             async move {
-                tokio::spawn(async move {
-                    use BonsaiDiffFileChange::*;
-                    match diff {
-                        Changed(_, (_, GitLeaf(oid))) | ChangedReusedId(_, (_, GitLeaf(oid))) => {
-                            upload_git_object(&ctx, uploader, reader, &oid).await
-                        }
-                        _ => Ok(()),
+                match entry {
+                    manifest::Entry::Tree(GitTree(oid))
+                    | manifest::Entry::Leaf((_, GitLeaf(oid))) => {
+                        upload_git_object(ctx, uploader, reader, &oid).await
                     }
-                })
-                .await??;
-                anyhow::Ok(())
+                }
             }
         })
         .try_buffer_unordered(100)
@@ -419,7 +414,7 @@ pub async fn import_commit_contents<Uploader: GitUploader, Reader: GitReader>(
         .log_future_stats(
             scuba.clone(),
             "Prefetched existing BonsaiGit Mappings",
-            None,
+            "Import".to_string(),
         )
         .into_iter()
         .flatten()
@@ -445,7 +440,7 @@ pub async fn import_commit_contents<Uploader: GitUploader, Reader: GitReader>(
     // and call finalize batch on them (for deriving data) without blocking the import of commits
     let (finalize_sender, mut finalize_receiver) = mpsc::channel(prefs.concurrency);
     // Spawn off an async consumer that would finalize batches of commits which have been imported into Mononoke
-    let batch_finalizer = tokio::spawn({
+    let batch_finalizer = mononoke::spawn_task({
         cloned!(
             backfill_derivation,
             ctx,
@@ -480,7 +475,7 @@ pub async fn import_commit_contents<Uploader: GitUploader, Reader: GitReader>(
                         }
                         Ok((stats, chunk)) => {
                             scuba.add_future_stats(&stats);
-                            scuba.log_with_msg("Completed Finalize Batch", None);
+                            scuba.log_with_msg("Completed Finalize Batch", "Import".to_string());
                             chunk
                         }
                     };
@@ -510,7 +505,7 @@ pub async fn import_commit_contents<Uploader: GitUploader, Reader: GitReader>(
     let (bonsai_sender, mut bonsai_receiver) = mpsc::channel(prefs.concurrency);
     // Spawn off an async consumer that would generate bonsai commits for Git commits that have had their Git data and file changes uploaded
     // to Mononoke
-    let bonsai_creator = tokio::spawn({
+    let bonsai_creator = mononoke::spawn_task({
         cloned!(ctx, uploader, acc, mut scuba);
         let concurrency = prefs.concurrency;
         async move {
@@ -537,7 +532,10 @@ pub async fn import_commit_contents<Uploader: GitUploader, Reader: GitReader>(
                     }
                     Ok((stats, int_cs)) => {
                         scuba.add_future_stats(&stats);
-                        scuba.log_with_msg("Created Bonsai Changeset for Git Commit", None);
+                        scuba.log_with_msg(
+                            "Created Bonsai Changeset for Git Commit",
+                            "Import".to_string(),
+                        );
                         int_cs
                     }
                 };
@@ -577,17 +575,25 @@ pub async fn import_commit_contents<Uploader: GitUploader, Reader: GitReader>(
                 prefs.stream_for_changed_trees
             );
             async move {
-                task::spawn({
+                mononoke::spawn_task({
                     async move {
                         let extracted_commit = ExtractedCommit::new(&ctx, oid, &reader)
                             .await
                             .with_context(|| format!("While extracting {}", oid))?;
 
                         let diff = extracted_commit.diff(&ctx, &reader, submodules);
-                        let file_changes =
-                            find_file_changes(&ctx, &lfs, reader.clone(), uploader.clone(), diff)
-                                .await
-                                .context("find_file_changes")?;
+                        let file_changes_uploader = uploader.clone();
+                        let file_changes_future = async {
+                            find_file_changes(
+                                &ctx,
+                                &lfs,
+                                reader.clone(),
+                                file_changes_uploader,
+                                diff,
+                            )
+                            .await
+                            .context("find_file_changes")
+                        };
                         let oid = extracted_commit.metadata.oid;
                         // Before generating the corresponding changeset at Mononoke end, upload the raw git commit
                         // and the git tree pointed to by the git commit.
@@ -603,28 +609,42 @@ pub async fn import_commit_contents<Uploader: GitUploader, Reader: GitReader>(
                         } else {
                             extracted_commit.changed_trees(&ctx, &reader).boxed()
                         };
-                        entries_stream
-                            .map_ok(|entry| {
-                                cloned!(uploader, reader, ctx);
-                                async move {
-                                    tokio::spawn(async move {
-                                        upload_git_object(&ctx, uploader, reader, &entry.0).await?;
-                                        anyhow::Ok(())
-                                    })
-                                    .await?
-                                }
-                            })
-                            .try_buffer_unordered(100)
-                            .try_collect::<()>()
-                            .await?;
+                        let entries_uploader = uploader.clone();
+                        let entries_future = async {
+                            entries_stream
+                                .map_ok(|entry| {
+                                    cloned!(entries_uploader, reader, ctx);
+                                    async move {
+                                        mononoke::spawn_task(async move {
+                                            upload_git_object(
+                                                &ctx,
+                                                entries_uploader,
+                                                reader,
+                                                &entry.0,
+                                            )
+                                            .await?;
+                                            anyhow::Ok(())
+                                        })
+                                        .await?
+                                    }
+                                })
+                                .try_buffer_unordered(100)
+                                .try_collect::<()>()
+                                .await
+                        };
                         // Upload packfile base item for Git commit and the raw Git commit
-                        upload_git_object_by_content(
-                            &ctx,
-                            uploader,
-                            &oid,
-                            extracted_commit.original_commit.clone(),
-                        )
-                        .await?;
+                        let git_commit_future = async {
+                            upload_git_object_by_content(
+                                &ctx,
+                                uploader,
+                                &oid,
+                                extracted_commit.original_commit.clone(),
+                            )
+                            .await
+                        };
+                        let (file_changes, _, _) =
+                            try_join3(file_changes_future, entries_future, git_commit_future)
+                                .await?;
 
                         Result::<_, Error>::Ok((extracted_commit, file_changes))
                     }
@@ -641,7 +661,7 @@ pub async fn import_commit_contents<Uploader: GitUploader, Reader: GitReader>(
             .log_future_stats(
                 scuba.clone(),
                 "Uploaded Content Blob, Git Blob, Commits and Trees",
-                None,
+                "Import".to_string(),
             )
         {
             bonsai_sender
@@ -656,7 +676,7 @@ pub async fn import_commit_contents<Uploader: GitUploader, Reader: GitReader>(
     .log_future_stats(
         scuba.clone(),
         "Uploaded Content Blob, Git Blob, Commits and Trees for all commits",
-        None,
+        "Import".to_string(),
     );
     // Drop the sender since we finished sending all the commits to the bonsai creator
     drop(bonsai_sender);
@@ -668,7 +688,7 @@ pub async fn import_commit_contents<Uploader: GitUploader, Reader: GitReader>(
         .log_future_stats(
             scuba.clone(),
             "Completed Bonsai Changeset creation for all commits",
-            None,
+            "Import".to_string(),
         )
         .context("Panic while running bonsai_creator for commits")?;
     // Ensure that the batch finalization has completed before we exit
@@ -679,7 +699,7 @@ pub async fn import_commit_contents<Uploader: GitUploader, Reader: GitReader>(
         .log_future_stats(
             scuba.clone(),
             "Completed Finalize Batch for all commits",
-            None,
+            "Import".to_string(),
         )
         .context("Panic while running finalize_batch for commits")?;
 
@@ -930,13 +950,32 @@ pub async fn import_tree_as_single_bonsai_changeset<Uploader: GitUploader>(
     extracted_commit.metadata.parents = Vec::new();
 
     let diff = extracted_commit.diff_root(ctx, &reader, prefs.submodules);
-    let file_changes = find_file_changes(ctx, &prefs.lfs, reader, uploader.clone(), diff).await?;
+    let file_changes =
+        find_file_changes(ctx, &prefs.lfs, reader.clone(), uploader.clone(), diff).await?;
 
-    // Before generating the corresponding changeset at Mononoke end, upload the raw git commit.
-    uploader
-        .upload_object(ctx, git_cs_id, extracted_commit.original_commit)
-        .await
-        .with_context(|| format_err!("Failed to upload raw git commit {}", git_cs_id))?;
+    // Before generating the corresponding changeset at Mononoke end, upload the raw git commit and raw git tree.
+    upload_git_object_by_content(
+        ctx,
+        uploader.clone(),
+        &git_cs_id,
+        extracted_commit.original_commit.clone(),
+    )
+    .await
+    .with_context(|| format_err!("Failed to upload raw git commit {}", git_cs_id))?;
+
+    upload_git_tree_recursively(
+        ctx,
+        uploader.clone(),
+        reader.clone(),
+        &extracted_commit.tree_oid,
+    )
+    .await
+    .with_context(|| {
+        format_err!(
+            "Failed to upload git trees corresponding to commit {}",
+            git_cs_id
+        )
+    })?;
 
     uploader
         .generate_intermediate_changeset_for_commit(

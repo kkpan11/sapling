@@ -515,12 +515,10 @@ impl PrefetchCmd {
             })?;
 
         if if_active && !checkout_config.predictive_prefetch_is_active() {
-            if options.options.verbose {
-                println!(
-                    "Predictive prefetch profiles have not been activated and \
-                    --if-active was specified. Skipping fetch."
-                );
-            }
+            eprintln!(
+                "Predictive prefetch profiles have not been activated and \
+                --if-active was specified. Skipping fetch."
+            );
             return Ok(0);
         }
 
@@ -544,6 +542,10 @@ impl PrefetchCmd {
                 checkout_path.display()
             )
         })?;
+
+        if options.foreground {
+            println!("Starting predictive prefetching in the foreground.")
+        }
         checkout
             .prefetch_profiles(
                 instance,
@@ -557,6 +559,14 @@ impl PrefetchCmd {
                 predictive_num_dirs,
             )
             .await?;
+
+        if options.foreground {
+            println!("Finished predictive prefetching.")
+        } else {
+            println!(
+                "Started predictive prefetching in the background. Use 'eden trace hg' to monitor prefetch progress."
+            );
+        }
         Ok(0)
     }
 }

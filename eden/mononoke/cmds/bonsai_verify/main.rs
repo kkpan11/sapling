@@ -32,7 +32,6 @@ use cloned::cloned;
 use commit_graph::CommitGraph;
 use commit_graph::CommitGraphRef;
 use context::CoreContext;
-use failure_ext::DisplayChain;
 use fbinit::FacebookInit;
 use futures::future;
 use futures::future::TryFutureExt;
@@ -244,8 +243,8 @@ fn subcommand_round_trip(
                                 warn!(logger, "INVALID");
                                 info!(
                                     logger, "manifest hash differs";
-                                    "expected manifest ID" => difference.expected_mf_id,
-                                    "roundtrip ID" => difference.roundtrip_mf_id,
+                                    "expected manifest ID" => difference.expected_mf_id.to_string(),
+                                    "roundtrip ID" => difference.roundtrip_mf_id.to_string(),
                                 );
                                 invalid.fetch_add(1, Ordering::Relaxed);
                                 if print_changes {
@@ -274,7 +273,7 @@ fn subcommand_round_trip(
                 // collect() below will stop after the first error, but we care about all errors.
                 // So report them now and keep returning Ok.
                 if let Err(err) = &res {
-                    error!(logger, "ERROR: {}", DisplayChain::from(err));
+                    error!(logger, "ERROR: {err:?}");
                     errors.fetch_add(1, Ordering::Relaxed);
                 }
                 Ok::<_, ()>(())

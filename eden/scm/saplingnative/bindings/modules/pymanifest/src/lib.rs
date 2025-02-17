@@ -93,7 +93,7 @@ py_class!(pub class treemanifest |py| {
         treemanifest::create_instance(py, Arc::new(RwLock::new(underlying)), RefCell::new(HashSet::new()))
     }
 
-    // Returns a new instance of treemanifest that contains the same data as the base.
+    /// Returns a new instance of treemanifest that contains the same data as the base.
     def copy(&self) -> PyResult<treemanifest> {
         treemanifest::create_instance(
             py,
@@ -102,8 +102,8 @@ py_class!(pub class treemanifest |py| {
         )
     }
 
-    // Returns (node, flag) for a given `path` in the manifest.
-    // When the `path` does not exist, it return a KeyError.
+    /// Returns (node, flag) for a given `path` in the manifest.
+    /// When the `path` does not exist, it return a KeyError.
     def find(&self, path: PyPathBuf) -> PyResult<(PyBytes, String)> {
         // Some code... probably sparse profile related is asking find to grab
         // random invalid paths.
@@ -157,7 +157,19 @@ py_class!(pub class treemanifest |py| {
         Ok(result)
     }
 
-    // Returns a list<path> for all files that match the predicate passed to the function.
+    /// Count the number of files that match the predicate passed to the function.
+    def countfiles(&self, pymatcher: PyObject) -> PyResult<u64> {
+        let tree = self.underlying(py);
+        let matcher = extract_matcher(py, pymatcher)?.0;
+        let result = py.allow_threads(move || -> Result<u64> {
+            let tree = tree.read();
+            tree.count_files(matcher)
+        });
+        let count = result.map_pyerr(py)?;
+        Ok(count)
+    }
+
+    /// Returns a list<path> for all files that match the predicate passed to the function.
     def walk(&self, pymatcher: PyObject) -> PyResult<Vec<PyPathBuf>> {
         let mut result = Vec::new();
         let tree = self.underlying(py);
@@ -174,16 +186,24 @@ py_class!(pub class treemanifest |py| {
     }
 
     /// Like walk(), but includes file node as well.
-    def walkfiles(&self, pymatcher: PyObject) -> PyResult<Vec<(PyPathBuf, PyBytes)>> {
+    def walkfiles(&self, pymatcher: PyObject, nodes_only: bool = false) -> PyResult<Vec<(PyPathBuf, PyBytes)>> {
         let tree = self.underlying(py);
 
         let (matcher, is_rust_matcher) = extract_matcher(py, pymatcher)?;
+
+        let make_path = |path: RepoPathBuf| -> PyPathBuf {
+            if nodes_only {
+                PyPathBuf::default()
+            } else {
+                path.into()
+            }
+        };
 
         if is_rust_matcher {
             tree.read().files(matcher)
                 .map(|file| {
                     let file = file?;
-                    Ok((file.path.into(), PyBytes::new(py, file.meta.hgid.as_ref())))
+                    Ok((make_path(file.path), PyBytes::new(py, file.meta.hgid.as_ref())))
                 })
                 .collect::<Result<Vec<_>>>().map_pyerr(py)
         } else {
@@ -194,7 +214,7 @@ py_class!(pub class treemanifest |py| {
             let mut result = Vec::new();
             for entry in files.into_iter() {
                 let file = entry.map_pyerr(py)?;
-                result.push((file.path.into(), PyBytes::new(py, file.meta.hgid.as_ref())));
+                result.push((make_path(file.path), PyBytes::new(py, file.meta.hgid.as_ref())));
             }
             Ok(result)
         }
@@ -300,7 +320,7 @@ py_class!(pub class treemanifest |py| {
     /// Diff between two treemanifests.
     ///
     /// Return a dict of {path: (left, right)}, where left and right are (file_hgid, file_type) tuple.
-    def diff(&self, other: &treemanifest, matcher: Option<PyObject> = None) -> PyResult<PyDict> {
+    def diff(&self, other: &treemanifest, matcher: Option<PyObject> = None, nodes_only: bool = false) -> PyResult<PyDict> {
         fn convert_side_diff(
             py: Python,
             entry: Option<FileMetadata>
@@ -323,7 +343,11 @@ py_class!(pub class treemanifest |py| {
             this_tree.read().diff(&other_tree.read(), matcher)?.collect()
         }).map_pyerr(py)?;
         for entry in results {
-            let path = PyPathBuf::from(entry.path);
+            let path = if nodes_only {
+                PyPathBuf::default()
+            } else {
+                PyPathBuf::from(entry.path)
+            };
             let diff_left = convert_side_diff(py, entry.diff_type.left());
             let diff_right = convert_side_diff(py, entry.diff_type.right());
             result.set_item(py, path, (diff_left, diff_right))?;
@@ -526,10 +550,6 @@ py_class!(pub class treemanifest |py| {
             result.push(PyPathBuf::from(file.path));
         }
         vec_to_iter(py, result)
-    }
-
-    def iteritems(&self) -> PyResult<PyObject> {
-        self.items(py)
     }
 
     def items(&self) -> PyResult<PyObject> {

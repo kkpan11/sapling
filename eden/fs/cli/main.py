@@ -28,6 +28,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple, Type
 
+from eden.fs.cli.doctor.check_filesystems import check_disk_usage
+
 from eden.fs.cli.util import get_chef_log_path
 
 # Constants
@@ -69,8 +71,13 @@ from eden.fs.cli.util import (
     wait_for_instance_healthy,
 )
 from eden.thrift.legacy import EdenClient, EdenNotRunningError
+
 from facebook.eden import EdenService
-from facebook.eden.ttypes import ChangeOwnershipRequest, MountState
+from facebook.eden.ttypes import (
+    ChangeOwnershipRequest,
+    MountState,
+    SendNotificationRequest,
+)
 from fb303_core.ttypes import fb303_status
 
 from . import (
@@ -982,10 +989,15 @@ is case-sensitive. This is not recommended and is intended only for testing."""
                 args.rev,
                 args.nfs,
                 args.case_sensitive,
-                args.overlay_type,
-                args.backing_store,
-                args.re_use_case,
-                enable_windows_symlinks,
+                overlay_type=args.overlay_type,
+                backing_store_type=args.backing_store,
+                re_use_case=args.re_use_case,
+                enable_windows_symlinks=enable_windows_symlinks,
+                off_mount_repo_dir=instance.get_config_bool(
+                    "clone.off-mount-repo-dir",
+                    # Enable by default in tests.
+                    any(v in os.environ for v in ("INTEGRATION_TEST", "TESTTMP")),
+                ),
             )
         except util.RepoError as ex:
             print_stderr("error: {}", ex)
@@ -1231,16 +1243,29 @@ class HealthReportCmd(Subcmd):
         INVALID_CERTS = 3
         NO_REPO_MOUNT_FOUND = 4
         CHEF_NOT_RUNNING = 5
+        LOW_DISK_SPACE = 6
 
-        def description(self) -> str:
-            descriptions = {
-                self.EDEN_NOT_RUNNING: "The EdenFS daemon doesn't seem to be running.",
-                self.STALE_EDEN_VERSION: "The running EdenFS daemon is over 30 days out-of-date.",
-                self.INVALID_CERTS: "EdenFS couldn't find a valid user certificate.",
-                self.NO_REPO_MOUNT_FOUND: "One or more checkouts are identified as unmounted.",
-                self.CHEF_NOT_RUNNING: "Chef doesn't seem to be running on your machine.",
+        def summary(self) -> str:
+            summary = {
+                self.EDEN_NOT_RUNNING: "Eden not running properly",
+                self.STALE_EDEN_VERSION: "Stale Eden version running",
+                self.INVALID_CERTS: "Invalid/Expired user certs detected",
+                self.NO_REPO_MOUNT_FOUND: "Eden checkouts not mounted properly",
+                self.CHEF_NOT_RUNNING: "Chef doesn't seem to be running properly",
+                self.LOW_DISK_SPACE: "Low disk space for EdenFS checkouts",
             }
-            return descriptions[self]
+            return summary[self]
+
+        def remediation(self) -> str:
+            remediation = {
+                self.EDEN_NOT_RUNNING: "Please run `Restart EdenFS` from E-menu",
+                self.STALE_EDEN_VERSION: "Please run `Restart EdenFS` from E-menu",
+                self.INVALID_CERTS: "Please `Renew SKS-Backed Certificates` from F-menu",
+                self.NO_REPO_MOUNT_FOUND: "Please run `Eden Doctor` from E-menu -> Diagnostics",
+                self.CHEF_NOT_RUNNING: "Please run `Fix My Server/Mac/Windows` from F-menu",
+                self.LOW_DISK_SPACE: "Please run `Clean EdenFs Disk (du --clean)` from E-menu -> Diagnostics",
+            }
+            return remediation[self]
 
     running_version: str = ""
     version_info: VersionInfo = VersionInfo()
@@ -1254,12 +1279,19 @@ class HealthReportCmd(Subcmd):
             help="path of the mount points",
             dest="mounts",
         )
+        parser.add_argument(
+            "--notify",
+            default=False,
+            action="store_true",
+            dest="notify",
+            help="If set, this command will ask the server to notify the user of errors encountered during health-check. This is currently only available on Windows",
+        )
 
     def is_eden_running(self, instance: EdenInstance) -> bool:
         health_info = instance.check_health()
         if not health_info.is_healthy():
             self.error_codes[HealthReportCmd.ErrorCode.EDEN_NOT_RUNNING] = (
-                "Failed to find EdenFS daemon pid"
+                "Failed to find EdenFS daemon pid."
             )
             return False
 
@@ -1267,14 +1299,14 @@ class HealthReportCmd(Subcmd):
             self.running_version = instance.get_running_version()
         except EdenNotRunningError:
             self.error_codes[HealthReportCmd.ErrorCode.EDEN_NOT_RUNNING] = (
-                "Failed to retrieve EdenFS running version"
+                "Failed to retrieve EdenFS running version."
             )
             return False
 
         self.version_info = version_mod.get_version_info(self.running_version)
         if not self.version_info.is_eden_running:
             self.error_codes[HealthReportCmd.ErrorCode.EDEN_NOT_RUNNING] = (
-                "Failed to retrieve EdenFS running version"
+                "Failed to retrieve EdenFS running version."
             )
             return False
         return True
@@ -1289,16 +1321,20 @@ class HealthReportCmd(Subcmd):
                 + (self.version_info.running_version or "")
                 + ", installed EdenFS version: "
                 + (self.version_info.installed_version or "")
+                + ". The running EdenFS daemon is over 30 days out-of-date."
             )
             return False
         return True
 
     def are_certs_valid(self) -> bool:
+        if util.is_sandcastle() or util.x2p_enabled():
+            return True
+
         if (cert := check_x509.find_x509_path()) and check_x509.validate_x509(cert):
             return True
         # cert error!
         self.error_codes[HealthReportCmd.ErrorCode.INVALID_CERTS] = (
-            "Failed to validate x509 certificates"
+            "Failed to validate x509 certificates."
         )
         return False
 
@@ -1313,7 +1349,7 @@ class HealthReportCmd(Subcmd):
 
             if unmounted_repos:
                 self.error_codes[HealthReportCmd.ErrorCode.NO_REPO_MOUNT_FOUND] = (
-                    ", ".join(unmounted_repos) + " not mounted correctly"
+                    ", ".join(unmounted_repos) + " not mounted correctly."
                 )
                 return False
 
@@ -1341,7 +1377,9 @@ class HealthReportCmd(Subcmd):
 
                 if not isinstance(last_chef_run_sec, (int, float)):
                     self.error_codes[HealthReportCmd.ErrorCode.CHEF_NOT_RUNNING] = (
-                        "Invalid/missing timestamp in " + CHEF_LOG_TIMESTAMP_KEY
+                        "Invalid/missing timestamp in "
+                        + CHEF_LOG_TIMESTAMP_KEY
+                        + ". Chef doesn't seem to be running on your machine."
                     )
                     return False
 
@@ -1355,7 +1393,8 @@ class HealthReportCmd(Subcmd):
                     self.error_codes[HealthReportCmd.ErrorCode.CHEF_NOT_RUNNING] = (
                         "Last run was "
                         + str((ms_since_last_run / 3600000))
-                        + " hours ago"
+                        + " hours ago."
+                        + " Chef doesn't seem to be running on your machine."
                     )
                     return False
                 return True
@@ -1368,32 +1407,74 @@ class HealthReportCmd(Subcmd):
             )
             return False
 
+    def has_enough_disk_space(self, instance: EdenInstance, mounts: List[str]) -> bool:
+        try:
+            mount_paths = mounts or instance.get_mount_paths()
+            disk_space_issues = check_disk_usage(
+                None, mount_paths, instance, fs_mod.new()
+            )
+            if disk_space_issues is not None:
+                self.error_codes[HealthReportCmd.ErrorCode.LOW_DISK_SPACE] = (
+                    disk_space_issues
+                )
+                return False
+        except Exception as e:
+            self.error_codes[HealthReportCmd.ErrorCode.LOW_DISK_SPACE] = (
+                "Failed to check disk space usage: " + str(e.args[0])
+            )
+            return False
+        return True
+
     @staticmethod
-    def print_error_codes_json(out: ui.Output) -> None:
+    def print_and_notify_errors(
+        instance: EdenInstance, out: ui.Output, notify: bool
+    ) -> None:
         """
-        Serialize and print error codes in JSON format.
+        Serialize and print error codes in JSON format. Optionally send notifications.
         Args:
+            instance (EdenInstance): The instance to use for sending notifications.
             out (ui.Output): Output stream to write the JSON data to.
-        Notes:
-            This method takes the set of error codes stored in `self.error_codes` and
-            converts them into a JSON string. The resulting JSON object has error code
-            names as keys and their corresponding descriptions as values.
+            notify (bool): Whether to send notifications.
         """
+
+        # Serialize error codes
         data = [
-            {
-                "error": error_code.name,
-                "description": error_additional_info
-                + ". Possible causes: "
-                + error_code.description(),
-            }
+            {"error": error_code.name, "description": error_additional_info}
             for error_code, error_additional_info in HealthReportCmd.error_codes.items()
         ]
+
+        # Print JSON data
         json_str = json.dumps(data, indent=2)
         out.writeln(json_str)
+
+        # Send notifications if enabled and on Windows platform
+        if notify and sys.platform == "win32":
+            for error_code in HealthReportCmd.error_codes.keys():
+                try:
+                    with instance.get_thrift_client_legacy() as client:
+                        request = SendNotificationRequest(
+                            title=error_code.summary(),
+                            description=error_code.remediation(),
+                        )
+                        client.sendNotification(request)
+                except thrift.transport.TTransport.TTransportException as e:
+                    # Ignore TTransportException if it is a UNKNOWN_METHOD error, this can
+                    # happen if the running version predates this endpoint
+                    if e.type != thrift.Thrift.TApplicationException.UNKNOWN_METHOD:
+                        print_stderr(f"warning: edenfs daemon is not responding: {e}")
+                except EdenNotRunningError:
+                    print_stderr("error: edenfs is not running")
+                except Exception as e:
+                    print_stderr(f"error: {e}")
 
     def run(self, args: argparse.Namespace) -> int:
         instance = get_eden_instance(args)
         mounts = args.mounts or []
+
+        # don't run health-report if there are no eden mounts
+        if not instance.get_mount_paths():
+            return 0
+
         out = ui.get_output()
         exit_code = 0
 
@@ -1409,10 +1490,11 @@ class HealthReportCmd(Subcmd):
                         self.is_chef_running,
                     ]
                 )
+                or not self.has_enough_disk_space(instance, mounts)
             ):
                 exit_code = 1
 
-            self.print_error_codes_json(out)
+            self.print_and_notify_errors(instance, out, args.notify)
         except Exception as ex:
             print(f"Failed to run health report: {str(ex)}", file=sys.stderr)
             exit_code = 255
@@ -1808,6 +1890,12 @@ class RemoveCmd(Subcmd):
         parser.add_argument(
             "paths", nargs="+", metavar="path", help="The EdenFS checkout(s) to remove"
         )
+        parser.add_argument(
+            "--no-force",
+            default=False,
+            action="store_true",
+            help=argparse.SUPPRESS,
+        )
 
     def is_prjfs_path(self, path: str) -> bool:
         if platform.system() != "Windows":
@@ -1994,7 +2082,7 @@ Any uncommitted changes and shelves in this checkout will be lost forever."""
                     print(
                         f"Unmounting `{mount}`. Please be patient: this can take up to 1 minute!"
                     )
-                    instance.unmount(mount)
+                    instance.unmount(mount, use_force=not args.no_force)
                 except EdenNotRunningError:
                     # Its fine if we could not tell the daemon to unmount
                     # because the daemon is not running. There is just no
@@ -2061,6 +2149,9 @@ class UnmountCmd(Subcmd):
             metavar="path",
             help="Path where checkout should be unmounted from",
         )
+        parser.add_argument(
+            "--no-force", default=False, action="store_true", help=argparse.SUPPRESS
+        )
 
     def run(self, args: argparse.Namespace) -> int:
         if args.destroy:
@@ -2080,7 +2171,7 @@ class UnmountCmd(Subcmd):
 
             path = normalize_path_arg(path)
             try:
-                instance.unmount(path)
+                instance.unmount(path, use_force=not args.no_force)
                 if args.destroy:
                     instance.destroy_mount(path)
             except (EdenService.EdenError, EdenNotRunningError) as ex:

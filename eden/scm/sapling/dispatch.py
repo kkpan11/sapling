@@ -40,7 +40,6 @@ from . import (
     perftrace,
     profiling,
     progress,
-    pycompat,
     registrar,
     scmutil,
     tracing,
@@ -170,7 +169,7 @@ def run(args, fin, fout, ferr, rctx: rscontext, skipprehooks: bool):
             status = -1
     if hasattr(req.ui, "ferr"):
         if err is not None and err.errno != errno.EPIPE:
-            errormsg = pycompat.encodeutf8(err.strerror)
+            errormsg = err.strerror.encode()
             req.ui.ferr.write(b"abort: %s\n" % errormsg)
         req.ui.ferr.flush()
     sys.exit(status & 255)
@@ -182,7 +181,7 @@ def _preimportmodules():
     extprefix = "sapling.ext."
     modnames = sorted(bindings.modules.list())
 
-    is_win = pycompat.iswindows
+    is_win = util.iswindows
     win_modnames = {
         "sapling.scmwindows",
         "sapling.win32",
@@ -345,7 +344,7 @@ def dispatch(req):
     except error.ProgrammingError as inst:
         req.ui.warn(_("** ProgrammingError: %s\n") % inst)
         if inst.hint:
-            req.ui.warn(_("** (%s)\n") % inst.hint)
+            req.ui.warn(_("** (%s)\n") % inst.hint, label="ui.hint")
         raise
     except error.SignalInterrupt:
         # maybe pager would quit without consuming all the output, and
@@ -356,7 +355,7 @@ def dispatch(req):
         # Windows does not have SIGPIPE, so pager exit does not
         # get raised as a SignalInterrupt. Let's handle the error
         # explicitly here
-        if not pycompat.iswindows or inst.errno != errno.EINVAL:
+        if not util.iswindows or inst.errno != errno.EINVAL:
             raise
         ret = -1
     finally:
@@ -549,7 +548,7 @@ def _callcatch(ui, req, func):
 
     except error.CommandError as inst:
         if inst.args[0]:
-            msgbytes = pycompat.bytestr(inst.args[1])
+            msgbytes = str(inst.args[1])
             ui.warn(_("@prog@ %s: %s\n") % (inst.args[0], msgbytes))
             ui.warn(_("(use '@prog@ %s -h' to get help)\n") % (inst.args[0],))
         else:
@@ -824,7 +823,7 @@ def _getlocal(ui, rpath):
         lui = ui.copy()
     else:
         try:
-            wd = pycompat.getcwd()
+            wd = os.getcwd()
         except OSError as e:
             if e.errno == errno.ENOTCONN:
                 ui.warn(_("current working directory is not connected\n"))
@@ -835,8 +834,7 @@ def _getlocal(ui, rpath):
                 )
                 return "", ui
             raise error.Abort(
-                _("error getting current working directory: %s")
-                % encoding.strtolocal(e.strerror)
+                _("error getting current working directory: %s") % e.strerror
             )
         path = cmdutil.findrepo(wd) or ""
 
@@ -1045,7 +1043,7 @@ def _dispatch(req):
                         if not func.optionalrepo:
                             if func.inferrepo and args and not path:
                                 # try to infer -R from command args
-                                repos = pycompat.maplist(cmdutil.findrepo, args)
+                                repos = list(map(cmdutil.findrepo, args))
                                 guess = repos[0]
                                 if guess and repos.count(guess) == len(repos):
                                     req.args = ["--repository", guess] + fullargs
@@ -1056,7 +1054,7 @@ def _dispatch(req):
                                     _(
                                         "'%s' is not inside a repository, but this command requires a repository"
                                     )
-                                    % pycompat.getcwd(),
+                                    % os.getcwd(),
                                     hint=_(
                                         "use 'cd' to go to a directory inside a repository and try again"
                                     ),

@@ -52,7 +52,6 @@ from sapling import (
     extensions,
     localrepo,
     match as matchmod,
-    pycompat,
     scmutil,
     tracing,
     util,
@@ -151,7 +150,7 @@ def getconfigs(wctx) -> sortdict:
     # read from .hgdirsync in repo
     filename = ".hgdirsync"
     try:
-        content = pycompat.decodeutf8(wctx[filename].data())
+        content = wctx[filename].data().decode()
     except (error.ManifestLookupError, IOError, AttributeError, KeyError):
         content = ""
     cfg = bindings.configloader.config()
@@ -208,7 +207,7 @@ def getmirrors(maps, filename):
             if checkpath.startswith(subdir):
                 return None, []
 
-    for key, mirrordirs in maps.items():
+    for mirrordirs in maps.values():
         for subdir in mirrordirs:
             if checkpath.startswith(subdir):
                 return subdir, mirrordirs
@@ -323,6 +322,10 @@ def dirsyncctx(ctx, matcher=None):
         matcher = matchmod.intersectmatchers(matcher, needsync)
     else:
         matcher = needsync
+
+    # skip dirsync if there is no files match the (needsync) matcher
+    if not any(matcher(p) for p in ctx.files()):
+        return resultctx, resultmirrored
 
     repo = ctx.repo()
     mctx, status = _mctxstatus(ctx, matcher)

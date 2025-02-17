@@ -19,6 +19,7 @@ import errno
 import operator
 import os
 import random
+import shlex
 import socket
 import ssl
 import struct
@@ -57,13 +58,10 @@ from .. import (
     json,
     lock as lockmod,
     match as matchmod,
-    merge as mergemod,
     mutation,
     phases,
     progress,
     pvec,
-    pycompat,
-    repair,
     revlog,
     revset,
     revsetlang,
@@ -81,7 +79,6 @@ from .. import (
 )
 from ..i18n import _, _n, _x
 from ..node import bin, hex, nullid, nullrev, short
-from ..pycompat import decodeutf8, range
 from . import migratesymlinks
 from .cmdtable import command
 
@@ -93,7 +90,7 @@ def debugancestor(ui, repo, *args) -> None:
     """find the ancestor revision of two revisions in a given index"""
     if len(args) == 3:
         index, rev1, rev2 = args
-        r = revlog.revlog(vfsmod.vfs(pycompat.getcwd(), audit=False), index)
+        r = revlog.revlog(vfsmod.vfs(os.getcwd(), audit=False), index)
         lookup = r.lookup
     elif len(args) == 2:
         if not repo:
@@ -449,7 +446,7 @@ def debugbuilddag(
 
     if text is None:
         ui.status(_("reading DAG from stdin\n"))
-        text = decodeutf8(ui.fin.read())
+        text = ui.fin.read().decode()
 
     cl = repo.changelog
     if len(cl) > 0:
@@ -502,10 +499,10 @@ def debugbuilddag(
                             base, local, other = [x[fn].data() for x in (pa, p1, p2)]
                             m3 = simplemerge.Merge3Text(base, local, other)
                             merged_lines = simplemerge.render_minimized(m3)[0]
-                            ml = [pycompat.decodeutf8(l.strip()) for l in merged_lines]
+                            ml = [l.strip().decode() for l in merged_lines]
                             ml.append("")
                         elif at > 0:
-                            datastr = pycompat.decodeutf8(p1[fn].data())
+                            datastr = p1[fn].data().decode()
                             ml = datastr.split("\n")
                         else:
                             # pyre-fixme[61]: `initialmergedlines` is undefined, or
@@ -534,12 +531,12 @@ def debugbuilddag(
                             for fn in p2:
                                 if fn.startswith("nf"):
                                     files.append(fn)
-                                    filecontent[fn] = pycompat.decodeutf8(p2[fn].data())
+                                    filecontent[fn] = p2[fn].data().decode()
 
                     def fctxfn(repo, cx, path):
                         if path in filecontent:
                             return context.memfilectx(
-                                repo, cx, path, pycompat.encodeutf8(filecontent[path])
+                                repo, cx, path, filecontent[path].encode()
                             )
                         return None
 
@@ -631,7 +628,7 @@ def _debugphaseheads(ui, data, indent: int = 0) -> None:
 def _quasirepr(thing) -> str:
     if isinstance(thing, (dict, util.sortdict, collections.OrderedDict)):
         return "{%s}" % (", ".join("%s: %s" % (k, thing[k]) for k in sorted(thing)))
-    return pycompat.bytestr(repr(thing))
+    return str(repr(thing))
 
 
 def _debugbundle2(ui, gen: bundle2.unbundle20, all=None, **opts) -> None:
@@ -1014,7 +1011,7 @@ def debugdag(ui, repo, file_=None, *revs, **opts):
     spaces = opts.get(r"spaces")
     dots = opts.get(r"dots")
     if file_:
-        rlog = revlog.revlog(vfsmod.vfs(pycompat.getcwd(), audit=False), file_)
+        rlog = revlog.revlog(vfsmod.vfs(os.getcwd(), audit=False), file_)
         revs = set((int(r) for r in revs))
 
         def events():
@@ -1179,7 +1176,6 @@ def debugstate(ui, repo, **opts) -> Optional[int]:
             timestr = "set                 "
         else:
             timestr = time.strftime(r"%Y-%m-%d %H:%M:%S ", time.localtime(ent[3]))
-            timestr = encoding.strtolocal(timestr)
         if ent[1] & 0o20000:
             mode = "lnk"
         else:
@@ -1541,8 +1537,7 @@ def debugfilerevision(ui, repo, *pats, **opts) -> None:
                 # function is mainly used for tests, so let's just replace those
                 # bytes so the tests are consistent between py2 and py3.
                 ui.write(
-                    _x("  rawdata: %r\n")
-                    % pycompat.decodeutf8(fctx.rawdata(), errors="replace")
+                    _x("  rawdata: %r\n") % fctx.rawdata().decode(errors="replace")
                 )
 
 
@@ -1784,9 +1779,7 @@ def debuginstall(ui, **opts) -> int:
     )
 
     # Python
-    fm.write(
-        "pythonexe", _("checking Python executable (%s)\n"), pycompat.sysexecutable
-    )
+    fm.write("pythonexe", _("checking Python executable (%s)\n"), sys.executable)
     fm.write(
         "pythonver",
         _("checking Python version (%s)\n"),
@@ -1902,7 +1895,7 @@ def debuginstall(ui, **opts) -> int:
     editor = util.expandpath(editor)
     fm.write("editor", _("checking commit editor (%s)\n"), editor)
     if editor != "internal:none":
-        cmdpath = util.findexe(pycompat.shlexsplit(editor)[0])
+        cmdpath = util.findexe(shlex.split(editor)[0])
         fm.condwrite(
             not cmdpath and editor == "vi",
             "vinotfound",
@@ -2445,23 +2438,23 @@ def debugpathcomplete(ui, repo, *specs, **opts) -> None:
         acceptable = "nmar"
     fullpaths = bool(opts[r"full"])
     cwd = repo.getcwd()
-    rootdir = repo.root + pycompat.ossep
-    fixpaths = pycompat.ossep != "/"
+    rootdir = repo.root + os.sep
+    fixpaths = os.sep != "/"
     matches = set()
     for spec in sorted(specs) or [""]:
-        spec = os.path.normpath(os.path.join(pycompat.getcwd(), spec))
+        spec = os.path.normpath(os.path.join(os.getcwd(), spec))
         if spec != repo.root and not spec.startswith(rootdir):
             continue
         if os.path.isdir(spec):
             spec += "/"
         spec = spec[len(rootdir) :]
         if fixpaths:
-            spec = spec.replace(pycompat.ossep, "/")
+            spec = spec.replace(os.sep, "/")
         complete(spec, acceptable, matches, fullpaths)
     for p in sorted(matches):
         p = repo.pathto(p, cwd).rstrip("/")
         if fixpaths:
-            p = p.replace("/", pycompat.ossep)
+            p = p.replace("/", os.sep)
         ui.write(p)
         ui.write("\n")
 
@@ -3043,7 +3036,7 @@ def debugssl(ui, repo, source=None, **opts) -> None:
     If the update succeeds, retry the original operation.  Otherwise, the cause
     of the SSL error is likely another issue.
     """
-    if not pycompat.iswindows:
+    if not util.iswindows:
         raise error.Abort(_("certificate chain building is only possible on Windows"))
 
     if not source:
@@ -3304,7 +3297,7 @@ def debugdrawdag(ui, repo, *args, **opts) -> None:
         data = b"".join(open(path, "rb").read() for path in args)
     else:
         data = ui.fin.read()
-    text = decodeutf8(data)
+    text = data.decode()
     return drawdag.drawdag(repo, text, **opts)
 
 
@@ -3453,7 +3446,7 @@ def debugcheckcasecollisions(ui, repo, *testfiles, **opts) -> int:
                     res = 1
     else:
         seen = set()
-        for mfnf in pycompat.iterkeys(ctx.manifest()):
+        for mfnf in ctx.manifest().keys():
             for mfn in [mfnf] + list(util.finddirs(mfnf)):
                 if mfn in seen:
                     continue
@@ -3551,7 +3544,7 @@ def debugmigratesymlinks(ui, repo, cmd: str = "enable", **opts) -> None:
     enable: makes the current repo support symlinks
     disable: makes the current repo NOT support symlinks
     """
-    if not pycompat.iswindows:
+    if not util.iswindows:
         raise error.Abort("this command only supports Windows")
     migratesymlinks.changereposymlinkstatus(ui, repo, cmd == "enable")
 
@@ -3748,12 +3741,15 @@ def debugruntest(ui, *paths, **opts) -> int:
         args = ["debugpython", "--"] + args
         return args
 
-    with extensions.wrappedfunction(
-        mputil,
-        "_args_from_interpreter_flags",
-        _args,
-        # pyre-fixme[6]: For 1st param expected `List[str]` but got `Tuple[Any, ...]`.
-    ), TestRunner(paths, jobs=jobs, exts=exts, isolate=isolate) as r:
+    with (
+        extensions.wrappedfunction(
+            mputil,
+            "_args_from_interpreter_flags",
+            _args,
+            # pyre-fixme[6]: For 1st param expected `List[str]` but got `Tuple[Any, ...]`.
+        ),
+        TestRunner(paths, jobs=jobs, exts=exts, isolate=isolate) as r,
+    ):
         for item in r:
             if isinstance(item, Mismatch):
                 mismatches.append(item)

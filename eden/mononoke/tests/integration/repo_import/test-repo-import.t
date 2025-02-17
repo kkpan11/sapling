@@ -160,13 +160,13 @@
       "260f78ba75e428610060f950dc7b4aa06a81e8b34179a38e6f46492f90c76084",
       "8d76deb176f7a48e0ab67b66cb791c6461406b6e35aedc440f6e4f9e3b27127c"
     ],
-    "hg_sync_check_disabled": true,
     "import_stage": "PushCommit",
     "imported_cs_id": "fea472cdf364ad6499f20e5f32c0ba01cb73fda8cab229c24f456df085b17622",
     "mark_not_synced_mapping": null,
     "merged_cs_id": * (glob)
     "move_bookmark_commits_done": 4,
     "phab_check_disabled": true,
+    "print_gitimport_map": false,
     "recovery_file_path": "$TESTTMP/repo-git/recovery_file.json",
     "shifted_bcs_ids": [
       "4f830791a5ae7a2981d6c252d2be0bd7ebd3b1090080074b4b4bae6deb250b4a",

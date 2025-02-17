@@ -15,6 +15,7 @@ from __future__ import absolute_import
 import hashlib
 import posixpath
 import shutil
+import sys
 from collections import defaultdict
 
 from bindings import (
@@ -39,14 +40,12 @@ from . import (
     match as matchmod,
     perftrace,
     progress,
-    pycompat,
     scmutil,
     util,
     worker,
 )
 from .i18n import _
 from .node import addednodeid, bin, hex, nullhex, nullid, wdirhex
-from .pycompat import encodeutf8
 from .utils import subtreeutil
 
 # merge action types
@@ -282,7 +281,7 @@ class mergestate:
         if fcl.isabsent():
             hash = nullhex
         else:
-            hash = hex(hashlib.sha1(encodeutf8(fcl.path())).digest())
+            hash = hex(hashlib.sha1(fcl.path().encode()).digest())
             wctx = fcl.changectx()
             if wctx.isinmemory() and self._optimize_inmemory:
                 # Detach data to maintain laziness, but disassociate the data from wctx
@@ -480,7 +479,7 @@ class mergestate:
         """return counts for updated, merged and removed files in this
         session"""
         updated, merged, removed = 0, 0, 0
-        for r, action in pycompat.itervalues(self._results):
+        for r, action in self._results.values():
             if r is None:
                 updated += 1
             elif r == 0:
@@ -954,8 +953,8 @@ def manifestmerge(
     if followcopies:
         copy = copies.mergecopies(repo, wctx, p2, pa)
 
-    boolbm = pycompat.bytestr(bool(branchmerge))
-    boolf = pycompat.bytestr(bool(force))
+    boolbm = str(bool(branchmerge))
+    boolf = str(bool(force))
     shouldsparsematch = hasattr(repo, "sparsematch") and (
         "eden" not in repo.requirements or "edensparse" in repo.requirements
     )
@@ -1201,7 +1200,7 @@ def _resolvetrivial(repo, wctx, mctx, ancestor, actions):
     """Resolves false conflicts where the nodeid changed but the content
     remained the same."""
 
-    for f, (m, args, msg) in pycompat.listitems(actions):
+    for f, (m, args, msg) in list(actions.items()):
         if (
             m == ACTION_CHANGED_DELETED
             and f in ancestor
@@ -1248,7 +1247,7 @@ def calculateupdates(
     else:  # only when merge.preferancestor=* - the default
         repo.ui.note(
             _("note: merging %s and %s using bids from ancestors %s\n")
-            % (wctx, mctx, _(" and ").join(pycompat.bytestr(anc) for anc in ancestors))
+            % (wctx, mctx, _(" and ").join(str(anc) for anc in ancestors))
         )
 
         # Call for bids
@@ -1367,7 +1366,7 @@ def batchremove(repo, wctx, actions):
     yields tuples for progress updates
     """
     verbose = repo.ui.verbose
-    cwd = pycompat.getcwdsafe()
+    cwd = util.getcwdsafe()
     i = 0
     for f, args, msg in actions:
         repo.ui.debug(" %s: %s -> r\n" % (f, msg))
@@ -1381,7 +1380,7 @@ def batchremove(repo, wctx, actions):
     if i > 0:
         yield i, 0, f
 
-    if cwd and not pycompat.getcwdsafe():
+    if cwd and not util.getcwdsafe():
         # cwd was removed in the course of removing files; print a helpful
         # warning.
         repo.ui.warn(
@@ -1586,9 +1585,10 @@ def applyupdates(repo, actions, wctx, mctx, overwrite, labels=None, ancestors=No
     rustworkers = userustworker()
 
     # record path conflicts
-    with progress.bar(
-        repo.ui, _("updating"), _("files"), numupdates
-    ) as prog, repo.ui.timesection("updateworker"):
+    with (
+        progress.bar(repo.ui, _("updating"), _("files"), numupdates) as prog,
+        repo.ui.timesection("updateworker"),
+    ):
         for f, args, msg in actions[ACTION_PATH_CONFLICT]:
             f1, fo = args
             s = repo.ui.status
@@ -1670,7 +1670,7 @@ def applyupdates(repo, actions, wctx, mctx, overwrite, labels=None, ancestors=No
                 repo.fileslog.filestore, repo.wvfs.base, numworkers
             )
             fctx = mctx.filectx
-            slinkfix = pycompat.iswindows and repo.wvfs._cansymlink
+            slinkfix = util.iswindows and repo.wvfs._cansymlink
             slinks = []
             ftof2 = {}
             for f, (f2, flags, backup), msg in get_actions:
@@ -1842,7 +1842,7 @@ def applyupdates(repo, actions, wctx, mctx, overwrite, labels=None, ancestors=No
                 ms.resolve(f, wctx)
                 files.append(f)
             reponame = repo.ui.config("fbscmquery", "reponame")
-            command = " ".join(util.shellquote(a) for a in pycompat.sysargv)
+            command = " ".join(util.shellquote(a) for a in sys.argv)
             repo.ui.log(
                 "manualmergefiles",
                 manual_merge_files=",".join(files),
@@ -2470,7 +2470,7 @@ def _update(
             and not fsmonitorenabled
             and p1.node() == nullid
             and len(actions[ACTION_GET]) >= fsmonitorthreshold
-            and pycompat.sysplatform.startswith(("linux", "darwin"))
+            and sys.platform.startswith(("linux", "darwin"))
         ):
             repo.ui.warn(
                 _(
@@ -2641,7 +2641,7 @@ def donativecheckout(repo, p1, p2, force, wc):
         repo.localvfs.writeutf8("updatestate", p2.hex())
 
     fp1, fp2, xp1, xp2 = p2.node(), nullid, xp2, ""
-    cwd = pycompat.getcwdsafe()
+    cwd = util.getcwdsafe()
 
     repo.ui.debug("Applying to %s \n" % repo.wvfs.base)
     failed_removes = plan.apply(
@@ -2652,7 +2652,7 @@ def donativecheckout(repo, p1, p2, force, wc):
     repo.ui.debug("Apply done\n")
     stats = plan.stats()
 
-    if cwd and not pycompat.getcwdsafe():
+    if cwd and not util.getcwdsafe():
         # cwd was removed in the course of removing files; print a helpful
         # warning.
         repo.ui.warn(

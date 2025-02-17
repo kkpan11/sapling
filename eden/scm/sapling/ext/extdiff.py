@@ -69,22 +69,13 @@ from __future__ import absolute_import
 
 import os
 import re
+import shlex
 import shutil
 import tempfile
 
-from sapling import (
-    archival,
-    cmdutil,
-    error,
-    filemerge,
-    pycompat,
-    registrar,
-    scmutil,
-    util,
-)
+from sapling import archival, cmdutil, error, filemerge, registrar, scmutil, util
 from sapling.i18n import _
 from sapling.node import nullid, short
-
 
 cmdtable = {}
 command = registrar.command(cmdtable)
@@ -408,7 +399,7 @@ def uisetup(ui):
             if path:
                 # case "cmd = path opts"
                 cmdline = path
-                diffopts = len(pycompat.shlexsplit(cmdline)) > 1
+                diffopts = len(shlex.split(cmdline)) > 1
             else:
                 # case "cmd ="
                 path = util.findexe(cmd)

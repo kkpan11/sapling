@@ -15,6 +15,7 @@ use anyhow::Result;
 use futures::future;
 use futures::future::Either;
 use futures::TryFutureExt;
+use mononoke_macros::mononoke;
 use slog::error;
 use slog::info;
 use slog::Logger;
@@ -40,7 +41,7 @@ use tokio::time;
 /// and an error is returned.
 pub async fn run_until_terminated<Server, QuiesceFn, ShutdownFut>(
     server: Server,
-    logger: &Logger,
+    logger: impl Into<Logger>,
     quiesce: QuiesceFn,
     shutdown_grace_period: Duration,
     shutdown: ShutdownFut,
@@ -52,6 +53,8 @@ where
     QuiesceFn: FnOnce(),
     ShutdownFut: Future<Output = ()>,
 {
+    let logger = logger.into();
+
     // We want to prevent Folly's signal handlers overriding our
     // intended action with a termination signal. Mononoke server,
     // in particular, depends on this - otherwise our attempts to
@@ -71,7 +74,7 @@ where
     let signalled = future::select(terminate, interrupt);
 
     // Spawn the server onto its own task
-    let server_handle = tokio::task::spawn(server);
+    let server_handle = mononoke::spawn_task(server);
 
     // Now wait for the termination signal, or a server exit.
     let server_result_or_handle = match future::select(server_handle, signalled).await {
@@ -79,11 +82,11 @@ where
             let server_result = server_result.map_err(Error::from).and_then(|res| res);
             match server_result.as_ref() {
                 Ok(()) => {
-                    error!(&logger, "Server has exited! Starting shutdown...");
+                    error!(logger, "Server has exited! Starting shutdown...");
                 }
                 Err(e) => {
                     error!(
-                        &logger,
+                        logger,
                         "Server exited with an error! Starting shutdown... Error: {:?}", e
                     );
                 }
@@ -91,7 +94,7 @@ where
             Either::Left(server_result)
         }
         Either::Right((_, server_handle)) => {
-            info!(&logger, "Signalled! Starting shutdown...");
+            info!(logger, "Signalled! Starting shutdown...");
             Either::Right(server_handle)
         }
     };
@@ -107,12 +110,12 @@ where
 
             match (waited, requests_in_flight) {
                 (_, req) if req <= 0 => {
-                    info!(&logger, "No requests still in flight!");
+                    info!(logger, "No requests still in flight!");
                     break;
                 }
                 (waited, req) if waited > shutdown_grace_period => {
                     info!(
-                        &logger,
+                        logger,
                         "Still {} requests in flight but we already waited {}s while the shutdown grace period is {}s. We're dropping the remaining requests.",
                         req,
                         waited.as_secs(),
@@ -121,7 +124,7 @@ where
                     break;
                 }
                 (_, req) => {
-                    info!(&logger, "Still {} requests in flight. Waiting", req);
+                    info!(logger, "Still {} requests in flight. Waiting", req);
                 }
             }
 
@@ -129,7 +132,7 @@ where
         }
     } else {
         info!(
-            &logger,
+            logger,
             "Waiting {}s before shutting down server",
             shutdown_grace_period.as_secs(),
         );
@@ -144,7 +147,7 @@ where
         }
     };
 
-    info!(&logger, "Shutting down...");
+    info!(logger, "Shutting down...");
     time::timeout(shutdown_timeout, shutdown)
         .map_err(|_| Error::msg("Timed out shutting down server"))
         .await?

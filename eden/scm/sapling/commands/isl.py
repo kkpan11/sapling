@@ -15,7 +15,7 @@ import bindings
 
 from bindings import webview
 
-from .. import error, pycompat
+from .. import error
 from ..i18n import _
 from ..node import hex
 
@@ -141,7 +141,7 @@ def isl_cmd(ui, repo, **opts):
     browser = opts.get("browser")
     app = opts.get("app")
     if app is None:
-        app = "web" not in pycompat.sysargv
+        app = "web" not in sys.argv
     dev = opts.get("dev")
     session = opts.get("session")
 

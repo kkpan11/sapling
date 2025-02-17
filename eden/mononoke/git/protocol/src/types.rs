@@ -24,7 +24,6 @@ use git_types::GDMV2Entry;
 use git_types::GDMV2ObjectEntry;
 use gix_hash::ObjectId;
 use metaconfig_types::GitDeltaManifestVersion;
-use mononoke_types::hash::RichGitSha1;
 use mononoke_types::path::MPath;
 use mononoke_types::ChangesetId;
 use packetline::encode::write_binary_packetline;
@@ -534,23 +533,50 @@ impl ShallowInfoRequest {
     }
 }
 
+/// Pair representing a ChangesetId and an ObjectId which are used to represent a
+/// commit in Mononoke and Git respectively
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub struct BonsaiAndGitCommit {
+    csid: ChangesetId,
+    oid: ObjectId,
+}
+
+impl BonsaiAndGitCommit {
+    pub fn csid(&self) -> ChangesetId {
+        self.csid
+    }
+
+    pub fn oid(&self) -> ObjectId {
+        self.oid
+    }
+}
+
+impl From<(ChangesetId, ObjectId)> for BonsaiAndGitCommit {
+    fn from(value: (ChangesetId, ObjectId)) -> Self {
+        Self {
+            csid: value.0,
+            oid: value.1,
+        }
+    }
+}
+
 /// Struct representing the response for shallow info section in Git fetch response
 #[derive(Debug, Clone)]
 pub struct ShallowInfoResponse {
     /// The set of commits that need to be returned as part of the shallow clone/fetch
-    pub commits: Vec<ChangesetId>,
+    pub commits: Vec<BonsaiAndGitCommit>,
     /// The set of commits that are returned as part of the shallow clone/fetch but also
     /// form the boundary of the shallow history sent by the server
-    pub boundary_commits: Vec<ChangesetId>,
+    pub boundary_commits: Vec<BonsaiAndGitCommit>,
     /// The set of commits that are considered as shallow at the client
-    pub client_shallow: Vec<ChangesetId>,
+    pub client_shallow: Vec<BonsaiAndGitCommit>,
 }
 
 impl ShallowInfoResponse {
     pub fn new(
-        commits: Vec<ChangesetId>,
-        boundary_commits: Vec<ChangesetId>,
-        client_shallow: Vec<ChangesetId>,
+        commits: Vec<BonsaiAndGitCommit>,
+        boundary_commits: Vec<BonsaiAndGitCommit>,
+        client_shallow: Vec<BonsaiAndGitCommit>,
     ) -> Self {
         Self {
             commits,
@@ -564,8 +590,13 @@ impl ShallowInfoResponse {
     pub fn client_unshallow_commits(&self) -> Vec<ChangesetId> {
         self.client_shallow
             .iter()
-            .filter(|shallow_commit| self.commits.contains(shallow_commit))
-            .copied()
+            .filter_map(|entry| {
+                if self.commits.contains(entry) {
+                    Some(entry.csid())
+                } else {
+                    None
+                }
+            })
             .collect()
     }
 }
@@ -577,31 +608,32 @@ pub(crate) struct FullObjectEntry {
     pub(crate) cs_id: ChangesetId,
     pub(crate) path: MPath,
     pub(crate) oid: ObjectId,
-    pub(crate) rich_git_sha: RichGitSha1,
+    pub(crate) size: u64,
+    pub(crate) kind: DeltaObjectKind,
 }
 
 impl FullObjectEntry {
-    pub fn new(cs_id: ChangesetId, path: MPath, rich_git_sha: RichGitSha1) -> Result<Self> {
-        let oid = rich_git_sha.sha1().to_object_id()?;
-        Ok(Self {
+    pub fn new(
+        cs_id: ChangesetId,
+        path: MPath,
+        oid: ObjectId,
+        size: u64,
+        kind: DeltaObjectKind,
+    ) -> Self {
+        Self {
             cs_id,
             path,
             oid,
-            rich_git_sha,
-        })
+            size,
+            kind,
+        }
     }
 
     pub fn into_delta_manifest_entry(self) -> GDMV2Entry {
-        let size = self.rich_git_sha.size();
-        let kind = if self.rich_git_sha.is_blob() {
-            DeltaObjectKind::Blob
-        } else {
-            DeltaObjectKind::Tree
-        };
         GDMV2Entry {
             full_object: GDMV2ObjectEntry {
-                size,
-                kind,
+                size: self.size,
+                kind: self.kind,
                 oid: self.oid,
                 inlined_bytes: None,
             },
@@ -612,13 +644,13 @@ impl FullObjectEntry {
 
 impl Hash for FullObjectEntry {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.rich_git_sha.hash(state);
+        self.oid.hash(state);
     }
 }
 
 impl PartialEq for FullObjectEntry {
     fn eq(&self, other: &Self) -> bool {
-        self.rich_git_sha == other.rich_git_sha
+        self.oid == other.oid
     }
 }
 

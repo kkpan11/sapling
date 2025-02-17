@@ -53,7 +53,6 @@ from .node import (
     wdirnodes,
     wdirrev,
 )
-from .pycompat import encodeutf8, isint, range
 from .utils import subtreeutil
 
 bytes_or_lazy_bytes = Union[bytes, Callable[[], bytes]]
@@ -121,7 +120,7 @@ class basectx:
         return self._repo.changelog.rev(self._node)
 
     def __bytes__(self):
-        return encodeutf8(str(self))
+        return str(self).encode()
 
     def __str__(self):
         node = self.node()
@@ -198,7 +197,7 @@ class basectx:
         for fn, (left, right) in d.items():
             if left and right and left[0] and right[0] and left[1] == right[1]:
                 for side in (left, right):
-                    if side[0] != modifiednodeid:
+                    if side[0] not in wdirnodes:
                         prefetch.append((fn, side[0]))
 
         # Prefetch file contents and file parents to avoid serial fetches in below
@@ -453,7 +452,7 @@ class changectx(basectx):
         self._repo = repo
 
         try:
-            if isint(changeid):
+            if isinstance(changeid, int):
                 changeid = scmutil.revf64decode(changeid)
                 self._node = repo.changelog.node(changeid)
                 return
@@ -815,7 +814,7 @@ class basefilectx:
     __bool__ = __nonzero__
 
     def __bytes__(self):
-        return encodeutf8(str(self))
+        return str(self).encode()
 
     def __str__(self):
         try:
@@ -1555,7 +1554,7 @@ class committablectx(basectx):
             self._extra = extra.copy()
 
     def __bytes__(self):
-        return encodeutf8(str(self))
+        return str(self).encode()
 
     def __str__(self):
         return str(self._parents[0]) + "+"

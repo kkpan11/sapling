@@ -10,7 +10,7 @@ from __future__ import absolute_import
 import os
 import time
 
-from . import json, pycompat, sshpeer, util
+from . import json, sshpeer, util
 
 
 class connectionpool:
@@ -174,7 +174,7 @@ class realconnectionpool:
 
     def close(self):
         self.reportreasons()
-        for pathpool in pycompat.itervalues(self._pool):
+        for pathpool in self._pool.values():
             for conn in pathpool:
                 conn.close()
             del pathpool[:]

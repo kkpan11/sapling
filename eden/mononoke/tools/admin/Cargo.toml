@@ -15,6 +15,7 @@ async_requests_client = { version = "0.1.0", path = "../../async_requests/async_
 backsyncer = { version = "0.1.0", path = "../../commit_rewriting/backsyncer" }
 blame = { version = "0.1.0", path = "../../derived_data/blame" }
 blobrepo_hg = { version = "0.1.0", path = "../../blobrepo/blobrepo_hg" }
+blobrepo_utils = { version = "0.1.0", path = "../../blobrepo_utils" }
 blobstore = { version = "0.1.0", path = "../../blobstore" }
 blobstore_factory = { version = "0.1.0", path = "../../blobstore/factory" }
 bonsai_blob_mapping = { version = "0.1.0", path = "../../repo_attributes/bonsai_blob_mapping" }
@@ -45,6 +46,7 @@ cmdlib_scrubbing = { version = "0.1.0", path = "../../cmdlib/scrubbing" }
 commit_graph = { version = "0.1.0", path = "../../repo_attributes/commit_graph/commit_graph" }
 commit_graph_types = { version = "0.1.0", path = "../../repo_attributes/commit_graph/commit_graph_types" }
 commit_id = { version = "0.1.0", path = "../../cmdlib/commit_id" }
+commit_transformation = { version = "0.1.0", path = "../../megarepo_api/commit_transformation" }
 content_manifest_derivation = { version = "0.1.0", path = "../../derived_data/content_manifest_derivation" }
 context = { version = "0.1.0", path = "../../server/context" }
 cross_repo_sync = { version = "0.1.0", path = "../../commit_rewriting/cross_repo_sync" }
@@ -70,15 +72,19 @@ gix-hash = "0.15.1"
 gix-object = "0.46.0"
 itertools = "0.14.0"
 justknobs = { version = "0.1.0", git = "https://github.com/facebookexperimental/rust-shed.git", branch = "main" }
+live_commit_sync_config = { version = "0.1.0", path = "../../commit_rewriting/live_commit_sync_config" }
 manifest = { version = "0.1.0", path = "../../manifest" }
 maplit = "1.0"
 megarepo_error = { version = "0.1.0", path = "../../megarepo_api/megarepo_error" }
+megarepolib = { version = "0.1.0", path = "../../commit_rewriting/megarepo" }
 mercurial_derivation = { version = "0.1.0", path = "../../derived_data/mercurial_derivation" }
 mercurial_types = { version = "0.1.0", path = "../../mercurial/types" }
 metaconfig_types = { version = "0.1.0", path = "../../metaconfig/types" }
 mononoke_api = { version = "0.1.0", path = "../../mononoke_api" }
 mononoke_app = { version = "0.1.0", path = "../../cmdlib/mononoke_app" }
+mononoke_macros = { version = "0.1.0", path = "../../mononoke_macros" }
 mononoke_types = { version = "0.1.0", path = "../../mononoke_types" }
+movers = { version = "0.1.0", path = "../../commit_rewriting/movers" }
 mutable_counters = { version = "0.1.0", path = "../../mutable_counters" }
 mutable_renames = { version = "0.1.0", path = "../../mutable_renames" }
 packfile = { version = "0.1.0", path = "../../git/packfile" }
@@ -92,7 +98,7 @@ pushrebase_mutation_mapping = { version = "0.1.0", path = "../../pushrebase_muta
 pushredirect = { version = "0.1.0", path = "../../megarepo_api/pushredirect" }
 redactedblobstore = { version = "0.1.0", path = "../../blobstore/redactedblobstore" }
 redaction = { version = "0.1.0", path = "../../features/redaction" }
-regex = "1.9.2"
+regex = "1.11.1"
 repo_blobstore = { version = "0.1.0", path = "../../blobrepo/repo_blobstore" }
 repo_bookmark_attrs = { version = "0.1.0", path = "../../repo_attributes/repo_bookmark_attrs" }
 repo_cross_repo = { version = "0.1.0", path = "../../repo_attributes/repo_cross_repo" }
@@ -108,7 +114,7 @@ serde = { version = "1.0.185", features = ["derive", "rc"] }
 serde_json = { version = "1.0.132", features = ["float_roundtrip", "unbounded_depth"] }
 skeleton_manifest = { version = "0.1.0", path = "../../derived_data/skeleton_manifest" }
 skeleton_manifest_v2 = { version = "0.1.0", path = "../../derived_data/skeleton_manifest_v2" }
-slog = { version = "2.7", features = ["max_level_trace", "nested-values"] }
+slog = { package = "tracing_slog_compat", version = "0.1.0", git = "https://github.com/facebookexperimental/rust-shed.git", branch = "main" }
 sorted_vector_map = { version = "0.2.0", git = "https://github.com/facebookexperimental/rust-shed.git", branch = "main" }
 source_control = { version = "0.1.0", path = "../../scs/if" }
 sql_commit_graph_storage = { version = "0.1.0", path = "../../repo_attributes/commit_graph/sql_commit_graph_storage" }
@@ -121,6 +127,6 @@ walkdir = "2.3"
 
 [dev-dependencies]
 fbinit-tokio = { version = "0.1.2", git = "https://github.com/facebookexperimental/rust-shed.git", branch = "main" }
-mononoke_macros = { version = "0.1.0", path = "../../mononoke_macros" }
+fixtures = { version = "0.1.0", path = "../../tests/fixtures" }
 test_repo_factory = { version = "0.1.0", path = "../../repo_factory/test_repo_factory" }
 tests_utils = { version = "0.1.0", path = "../../tests/utils" }
