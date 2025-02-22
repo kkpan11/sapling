@@ -48,15 +48,16 @@ from __future__ import absolute_import
 import os
 import socket
 import struct
+import sys
 import time
 from typing import BinaryIO, Callable, Dict, List, Optional
 
 from bindings import commands, hgtime
+
 from sapling import prefork, tracing
 
-from . import commandserver, encoding, error, pycompat, ui as uimod, util
+from . import commandserver, encoding, error, ui as uimod, util
 from .i18n import _
-
 
 _log = commandserver.log
 
@@ -101,7 +102,7 @@ class channeledsystem:
         self.out = out
 
     def _send_request(self, channel: bytes, args: "List[str]") -> None:
-        data = pycompat.encodeutf8("\0".join(args) + "\0")
+        data = ("\0".join(args) + "\0").encode()
         self.out.write(struct.pack(">cI", channel, len(data)))
         self.out.write(data)
         self.out.flush()
@@ -161,7 +162,7 @@ class channeledsystem:
 
         while True:
             bcmd = self.in_.readline()[:-1]
-            cmd = pycompat.decodeutf8(bcmd)
+            cmd = bcmd.decode()
             if not cmd:
                 break
             if cmd in cmdtable:
@@ -227,7 +228,7 @@ class chgcmdserver(commandserver.server):
         path = self._readstr()
         if not path:
             return
-        path = pycompat.decodeutf8(path)
+        path = path.decode()
         _log("chdir to %r\n" % path)
         os.chdir(path)
 
@@ -246,13 +247,13 @@ class chgcmdserver(commandserver.server):
 
         util._reloadenv()
         args = self._readlist()
-        pycompat.sysargv[1:] = args
+        sys.argv[1:] = args
         origui = uimod.ui
         # Use the class patched by _newchgui so 'system' and 'pager' requests
         # get forwarded to chg client
         uimod.ui = self.ui.__class__
         try:
-            ret = commands.run([pycompat.sysargv[0]] + args)
+            ret = commands.run([sys.argv[0]] + args)
             tracing.debug(target="command_info", chg="on")
             self.cresult.write(struct.pack(">i", int(ret & 255)))
         finally:
@@ -300,7 +301,7 @@ class chgcmdserver(commandserver.server):
             """Change process title"""
             name = self._readstr()
             _log("setprocname: %r\n" % name)
-            util.setprocname(pycompat.decodeutf8(name))
+            util.setprocname(name.decode())
 
         # pyre-fixme[16]: `chgcmdserver` has no attribute `setprocname`.
         capabilities["setprocname"] = setprocname

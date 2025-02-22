@@ -1,9 +1,8 @@
 from __future__ import absolute_import, print_function
 
-from sapling import pycompat, ui, util, wireproto
+import io
 
-
-stringio = util.stringio
+from sapling import ui, wireproto
 
 
 class proto:
@@ -46,17 +45,17 @@ class clientpeer(wireproto.wirepeer):
     def _call(self, cmd, **args):
         res = wireproto.dispatch(self.serverrepo, proto(args), cmd)
         if isinstance(res, str):
-            res = pycompat.encodeutf8(res)
+            res = res.encode()
         return res
 
     def _callstream(self, cmd, **args):
-        return stringio(self._call(cmd, **args))
+        return io.BytesIO(self._call(cmd, **args))
 
     @wireproto.batchable
     def greet(self, name):
         f = wireproto.future()
         yield {"name": mangle(name)}, f
-        yield unmangle(pycompat.decodeutf8(f.value))
+        yield unmangle(f.value.decode())
 
 
 class serverrepo:

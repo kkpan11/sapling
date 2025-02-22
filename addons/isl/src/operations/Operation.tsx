@@ -5,6 +5,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+import type {TrackEventName} from 'isl-server/src/analytics/eventNames';
 import type {
   ApplyMergeConflictsPreviewsFuncType,
   ApplyUncommittedChangesPreviewsFuncType,
@@ -13,10 +14,11 @@ import type {
   UncommittedChangesPreviewContext,
 } from '../previews';
 import type {CommandArg, RunnableOperation} from '../types';
-import type {TrackEventName} from 'isl-server/src/analytics/eventNames';
 
-import {CommandRunner} from '../types';
 import {randomId} from 'shared/utils';
+import {enableSaplingDebugFlag, enableSaplingVerboseFlag} from '../atoms/debugToolAtoms';
+import {readAtom} from '../jotaiUtils';
+import {CommandRunner} from '../types';
 
 /**
  * Operations represent commands that mutate the repository, such as rebasing, committing, etc.
@@ -73,12 +75,26 @@ export abstract class Operation {
 
   getRunnableOperation(): RunnableOperation {
     return {
-      args: this.getArgs(),
+      args: [...this.getExtraArgs(), ...this.getArgs()],
       id: this.id,
       stdin: this.getStdin(),
       runner: this.runner,
       trackEventName: this.trackEventName,
     };
+  }
+
+  /** Extra global args, like --debug, --verbose. */
+  getExtraArgs(): Array<CommandArg> {
+    const args: Array<CommandArg> = [];
+    if (this.runner === CommandRunner.Sapling) {
+      if (readAtom(enableSaplingVerboseFlag)) {
+        args.push('--verbose');
+      }
+      if (readAtom(enableSaplingDebugFlag)) {
+        args.push('--debug');
+      }
+    }
+    return args;
   }
 }
 
@@ -92,6 +108,10 @@ export type OperationDescription = {
   /** If set, this replaces the default command arguments. */
   description?: string;
 
-  /** If set, this replaces the default command + output tooltip. */
+  /**
+   * If set, this replaces the default command in the output tooltip.
+   * It also indicates that the output lines might contain a JSON string
+   * that is not suitable for human reading.
+   */
   tooltip?: string;
 };

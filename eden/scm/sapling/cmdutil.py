@@ -13,6 +13,7 @@
 from __future__ import absolute_import
 
 import errno
+import io
 import itertools
 import os
 import re
@@ -53,7 +54,6 @@ from . import (
     pathutil,
     perftrace,
     progress,
-    pycompat,
     registrar,
     revlog,
     revsetlang,
@@ -66,15 +66,12 @@ from . import (
 )
 from .i18n import _, _x
 from .node import hex, nullid, nullrev, short
-from .pycompat import ensureunicode, range
 from .utils import subtreeutil
 
 if typing.TYPE_CHECKING:
     from .ui import ui
     from .uiconfig import uiconfig
 
-
-stringio = util.stringio
 
 # templates of common command options
 
@@ -112,6 +109,18 @@ commitopts = [
 commitopts2 = [
     ("d", "date", "", _("record the specified date as commit date"), _("DATE")),
     ("u", "user", "", _("record the specified user as committer"), _("USER")),
+]
+
+messagefieldopts = [
+    (
+        "",
+        "message-field",
+        [],
+        _(
+            "rewrite fields of commit message (e.g. --message-field=Summary='New Summary' to update or --message-field=-Summary to remove) (EXPERIMENTAL)"
+        ),
+        _("fieldname=fieldvalue"),
+    ),
 ]
 
 # hidden for now
@@ -270,13 +279,13 @@ def comparechunks(chunks, headers):
     Generate patches for both sets of data and then compare the patches.
     """
 
-    originalpatch = stringio()
+    originalpatch = io.BytesIO()
     for header in headers:
         header.write(originalpatch)
         for hunk in header.hunks:
             hunk.write(originalpatch)
 
-    newpatch = stringio()
+    newpatch = io.BytesIO()
     for chunk in chunks:
         chunk.write(newpatch)
 
@@ -456,7 +465,7 @@ def dorecord(ui, repo, commitfunc, cmdsuggest, backupall, filterfn, *pats, **opt
                 util.copyfile(repo.wjoin(f), tmpname, copystat=True)
                 backups[f] = tmpname
 
-            fp = stringio()
+            fp = io.BytesIO()
             for c in chunks:
                 if c.filename() in backups:
                     c.write(fp)
@@ -468,13 +477,13 @@ def dorecord(ui, repo, commitfunc, cmdsuggest, backupall, filterfn, *pats, **opt
                 patchtext = (
                     crecordmod.diffhelptext
                     + crecordmod.patchhelptext
-                    + pycompat.decodeutf8(fp.read())
+                    + fp.read().decode()
                 )
                 reviewedpatch = ui.edit(
                     patchtext, "", action="diff", repopath=repo.path
                 )
                 fp.truncate(0)
-                fp.write(pycompat.encodeutf8(reviewedpatch))
+                fp.write(reviewedpatch.encode())
                 fp.seek(0)
 
             [os.unlink(repo.wjoin(c)) for c in newlyaddedandmodifiedfiles]
@@ -636,7 +645,7 @@ class dirnode:
             # Making sure we terse only when the status abbreviation is
             # passed as terse argument
             if onlyst in terseargs:
-                yield onlyst, self.path + pycompat.ossep
+                yield onlyst, self.path + os.sep
                 return
 
         # add the files to status list
@@ -666,7 +675,7 @@ def tersedir(statuslist, terseargs):
     allst = ("m", "a", "r", "d", "u", "i", "c")
 
     # checking the argument validity
-    for s in pycompat.bytestr(terseargs):
+    for s in str(terseargs):
         if s not in allst:
             raise error.Abort(_("'%s' not recognized") % s)
 
@@ -715,7 +724,7 @@ def _conflictsmsg(repo):
     if unresolvedlist:
         mergeliststr = "\n".join(
             [
-                "    %s" % util.pathto(repo.root, pycompat.getcwd(), path)
+                "    %s" % util.pathto(repo.root, os.getcwd(), path)
                 for path in unresolvedlist
             ]
         )
@@ -987,17 +996,97 @@ def logmessage(repo, opts):
     if not message and logfile:
         try:
             if isstdiofilename(logfile):
-                message = pycompat.decodeutf8(ui.fin.read())
+                message = ui.fin.read().decode()
             else:
-                message = pycompat.decodeutf8(
-                    b"\n".join(util.readfile(logfile).splitlines())
-                )
+                message = b"\n".join(util.readfile(logfile).splitlines()).decode()
         except IOError as inst:
             raise error.Abort(
-                _("can't read commit message '%s': %s")
-                % (logfile, encoding.strtolocal(inst.strerror))
+                _("can't read commit message '%s': %s") % (logfile, inst.strerror)
             )
+
+    message = _update_commit_message_fields(
+        message,
+        ui.configlist("committemplate", "commit-message-fields"),
+        opts,
+    )
+
     return message
+
+
+def _update_commit_message_fields(
+    message: str, configured_fields: List[str], opts
+) -> str:
+    """Update fields in message based on opts["message_fields"].
+
+    >>> _update_commit_message_fields("title\\nSummary: summary.", ["Summary"], {})
+    'title\\nSummary: summary.'
+
+    >>> _update_commit_message_fields("title\\nSummary: summary.", ["Summary"], {"message_field": ["Summary=\\nnew summary."]})
+    'title\\nSummary:\\nnew summary.'
+
+    >>> _update_commit_message_fields("old title\\nSummary:\\nOld summary.\\nReviewer: foo", ["Summary", "Test Plan", "Reviewer"], {"message_field": ["Title=new title", "Test Plan=new test plan"]})
+    'new title\\nSummary:\\nOld summary.\\nTest Plan: new test plan\\nReviewer: foo'
+
+    >>> _update_commit_message_fields("old title\\nSummary:\\nOld summary.\\nReviewer: foo", ["Summary", "Test Plan", "Reviewer"], {"message_field": ["-Summary"]})
+    'old title\\nReviewer: foo'
+    """
+    fields = opts.get("message_field") or []
+    if not fields:
+        return message
+
+    fields_to_update = {}
+    for field in fields:
+        remove = False
+        if field and field[0] == "-":
+            remove = True
+            field = field[1:]
+
+        parts = field.split("=", 1)
+        if len(parts) == 1 != remove:
+            raise error.Abort(
+                _("--message-field format is name=value or -name to remove")
+            )
+
+        if remove:
+            fields_to_update[field] = None
+            continue
+
+        name, value = parts
+        if name != "Title":
+            if value and value[0] != "\n":
+                value = " " + value
+            # Format value to include the section name. This is consistent with what
+            # _parse_commit_message() returns.
+            value = f"{name}:{value}"
+        fields_to_update[name] = value
+
+    parsed_message = _parse_commit_message(message.split("\n"), set(configured_fields))
+
+    # Pretend like title has a field name of "Title" so it is addressable by user.
+    if parsed_message and parsed_message[0][0] is None:
+        parsed_message[0] = ("Title", parsed_message[0][1])
+
+    updated_lines = []
+    for field in ["Title"] + configured_fields:
+        if parsed_message and parsed_message[0][0] == field:
+            parsed_value = parsed_message.pop(0)[1]
+            # If user is not updating this field, carry over old value.
+            if field not in fields_to_update:
+                updated_lines.extend(parsed_value)
+
+        # User is updating (or insterting) this value - stick in the new value.
+        if field in fields_to_update:
+            value = fields_to_update.pop(field)
+            if value is not None:
+                updated_lines.extend(value.split("\n"))
+
+    for unused in fields_to_update:
+        raise error.Abort(
+            _("field name %r not configured in committemplate.commit-message-fields")
+            % unused
+        )
+
+    return "\n".join(updated_lines)
 
 
 def mergeeditform(ctxorbool, baseformname):
@@ -1223,7 +1312,7 @@ def openrevlog(repo, cmd, file_, opts):
             raise error.CommandError(cmd, _("invalid arguments"))
         if not os.path.isfile(file_):
             raise error.Abort(_("revlog '%s' not found") % file_)
-        r = revlog.revlog(vfsmod.vfs(pycompat.getcwd(), audit=False), file_[:-2] + ".i")
+        r = revlog.revlog(vfsmod.vfs(os.getcwd(), audit=False), file_[:-2] + ".i")
     return r
 
 
@@ -1397,10 +1486,7 @@ def copy(ui, repo, pats, opts, rename=False):
                     ui.warn(_("%s: deleted in working directory\n") % relsrc)
                     srcexists = False
                 else:
-                    ui.warn(
-                        _("%s: cannot copy - %s\n")
-                        % (relsrc, encoding.strtolocal(inst.strerror))
-                    )
+                    ui.warn(_("%s: cannot copy - %s\n") % (relsrc, inst.strerror))
                     return True  # report a failure
 
         if ui.verbose or not exact:
@@ -1436,7 +1522,7 @@ def copy(ui, repo, pats, opts, rename=False):
             else:
                 striplen = len(abspfx)
             if striplen:
-                striplen += len(pycompat.ossep)
+                striplen += len(os.sep)
             res = lambda p: os.path.join(dest, util.localpath(p)[striplen:])
         elif destdirexists:
             res = lambda p: os.path.join(dest, os.path.basename(util.localpath(p)))
@@ -1468,12 +1554,12 @@ def copy(ui, repo, pats, opts, rename=False):
                 abspfx = util.localpath(abspfx)
                 striplen = len(abspfx)
                 if striplen:
-                    striplen += len(pycompat.ossep)
+                    striplen += len(os.sep)
                 if os.path.isdir(os.path.join(dest, os.path.split(abspfx)[1])):
                     score = evalpath(striplen)
                     striplen1 = len(os.path.split(abspfx)[0])
                     if striplen1:
-                        striplen1 += len(pycompat.ossep)
+                        striplen1 += len(os.sep)
                     if evalpath(striplen1) > score:
                         striplen = striplen1
                 res = lambda p: os.path.join(dest, util.localpath(p)[striplen:])
@@ -1827,7 +1913,7 @@ def _exportsingle(
     if writestr is None:
 
         def writestr(s):
-            write(pycompat.encodeutf8(s))
+            write(s.encode())
 
     node = scmutil.binnode(ctx)
     parents = [p.node() for p in ctx.parents() if p]
@@ -3428,14 +3514,14 @@ def displaygraph(
         )
         # The Rust graph renderer works with unicode.
         msg = "".join(
-            ensureunicode(encoding.unifromlocal(s), errors="replace")
+            s if isinstance(s, str) else s.decode(errors="replace")
             for s in displayer.hunk.pop(rev)
         )
         nextrow = renderer.nextrow(rev, parents, char, msg)
         if out is not None:
             out(nextrow)
         else:
-            ui.write(encoding.unitolocal(nextrow))
+            ui.write(nextrow)
         if on_output is not None:
             on_output(ctx, nextrow)
         displayer.flush(ctx)
@@ -3782,19 +3868,6 @@ def cat(ui, repo, ctx, matcher, basefm, fntemplate, prefix, **opts):
             fm.startitem()
             fm.writebytes("data", b"%s", data)
             fm.data(abspath=path, path=matcher.rel(path))
-
-    # Automation often uses hg cat on single files, so special case it
-    # for performance to avoid the cost of parsing the manifest.
-    if len(matcher.files()) == 1 and not matcher.anypats():
-        file = matcher.files()[0]
-        mfl = repo.manifestlog
-        mfnode = ctx.manifestnode()
-        try:
-            if mfnode and mfl[mfnode].find(file)[0]:
-                write(file)
-                return 0
-        except KeyError:
-            pass
 
     for abs in ctx.walk(matcher):
         write(abs)
@@ -4293,7 +4366,7 @@ def commitforceeditor(
         committext = buildcommittext(repo, ctx, summaryfooter)
 
     # run editor in the repository root
-    olddir = pycompat.getcwd()
+    olddir = os.getcwd()
     os.chdir(repo.root)
 
     # make in-memory changes visible to external process
@@ -4356,7 +4429,7 @@ def buildcommittemplate(repo, ctx, ref, summaryfooter=""):
 
     ui.pushbuffer()
     t.show(ctx)
-    return pycompat.decodeutf8(ui.popbufferbytes(), errors="replace")
+    return ui.popbufferbytes().decode(errors="replace")
 
 
 def localcommittemplate(repo, ctx):
@@ -4868,7 +4941,7 @@ def _performrevert(
         if tobackup is None:
             tobackup = set()
         # Apply changes
-        fp = stringio()
+        fp = io.BytesIO()
         for c in chunks:
             # Create a backup file only if this hunk should be backed up
             if ishunk(c) and c.header.filename() in tobackup:

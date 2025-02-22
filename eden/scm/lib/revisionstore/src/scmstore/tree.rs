@@ -54,8 +54,6 @@ use crate::scmstore::tree::types::LazyTree;
 use crate::scmstore::tree::types::StoreTree;
 use crate::scmstore::tree::types::TreeAttributes;
 use crate::trait_impls::sha1_digest;
-use crate::ContentDataStore;
-use crate::ContentMetadata;
 use crate::Delta;
 use crate::HgIdHistoryStore;
 use crate::HgIdMutableDeltaStore;
@@ -283,11 +281,9 @@ impl TreeStore {
 
                     let mut found_count: usize = 0;
                     for key in pending.into_iter() {
-                        if let Some(entry) = log.get_entry(key)? {
-                            tracing::trace!("{:?} found in {:?}", entry.key(), location);
-                            state
-                                .common
-                                .found(entry.key().clone(), LazyTree::IndexedLog(entry).into());
+                        if let Some(entry) = log.get_entry(&key.hgid)? {
+                            tracing::trace!("{:?} found in {:?}", key, location);
+                            state.common.found(key, LazyTree::IndexedLog(entry).into());
                             found_count += 1;
                         }
                     }
@@ -418,7 +414,7 @@ impl TreeStore {
     fn write_batch(&self, entries: impl Iterator<Item = (Key, Bytes, Metadata)>) -> Result<()> {
         if let Some(ref indexedlog_local) = self.indexedlog_local {
             for (key, bytes, meta) in entries {
-                indexedlog_local.put_entry(Entry::new(key, bytes, meta))?;
+                indexedlog_local.put_entry(Entry::new(key.hgid, bytes, meta))?;
             }
         }
         Ok(())
@@ -527,28 +523,6 @@ impl HgIdDataStore for TreeStore {
                 .single()?
             {
                 Some(entry) => StoreResult::Found(entry.content.expect("content attribute not found despite being requested and returned as complete").hg_content()?.into_vec()),
-                None => StoreResult::NotFound(key),
-            },
-        )
-    }
-
-    fn get_meta(&self, key: StoreKey) -> Result<StoreResult<Metadata>> {
-        Ok(
-            match self
-                .fetch_batch(
-                    std::iter::once(key.clone()).filter_map(StoreKey::maybe_into_key),
-                    TreeAttributes::CONTENT,
-                    FetchMode::AllowRemote,
-                )
-                .single()?
-            {
-                // This is currently in a bit of an awkward state, as revisionstore metadata is no longer used for trees
-                // (it should always be default), but the get_meta function should return StoreResult::Found
-                // only when the content is available. Thus, we request the tree content, but ignore it and just
-                // return default metadata when it's found, and otherwise report StoreResult::NotFound.
-                // TODO(meyer): Replace this with an presence check once support for separate fetch and return attrs
-                // is added.
-                Some(_e) => StoreResult::Found(Metadata::default()),
                 None => StoreResult::NotFound(key),
             },
         )
@@ -682,19 +656,6 @@ impl RemoteHistoryStore for TreeStore {
 impl HistoryStore for TreeStore {
     fn with_shared_only(&self) -> Arc<dyn HistoryStore> {
         Arc::new(self.with_shared_only())
-    }
-}
-
-// TODO(meyer): Content addressing not supported at all for trees. I could look for HgIds present here and fetch with
-// that if available, but I feel like there's probably something wrong if this is called for trees. Do we need to implement
-// this at all for trees?
-impl ContentDataStore for TreeStore {
-    fn blob(&self, key: StoreKey) -> Result<StoreResult<Bytes>> {
-        Ok(StoreResult::NotFound(key))
-    }
-
-    fn metadata(&self, key: StoreKey) -> Result<StoreResult<ContentMetadata>> {
-        Ok(StoreResult::NotFound(key))
     }
 }
 

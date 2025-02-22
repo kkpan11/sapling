@@ -399,12 +399,13 @@ function repo_metadata_logger {
 # Remove the glog prefix
 function strip_glog {
   # based on https://our.internmc.facebook.com/intern/wiki/LogKnock/Log_formats/#regex-for-glog
-  sed -E -e 's%^[VDIWECFT][[:digit:]]{4} [[:digit:]]{2}:?[[:digit:]]{2}:?[[:digit:]]{2}(\.[[:digit:]]+)?\s+(([0-9a-f]+)\s+)?(\[([^]]+)\]\s+)?(\(([^\)]+)\)\s+)?(([a-zA-Z0-9_./-]+):([[:digit:]]+))\]\s+%%' \
-  | grep -v "ODS3 SDK has dropped some samples." || true
+  sed -E -e 's%^[VDIWECFT][[:digit:]]{4} [[:digit:]]{2}:?[[:digit:]]{2}:?[[:digit:]]{2}(\.[[:digit:]]+)?\s+(([0-9a-f]+)\s+)?(\[([^]]+)\]\s+)?(\(([^\)]+)\)\s+)?(([a-zA-Z0-9_./-]+):([[:digit:]]+))\]\s+%%'
 }
 
 function with_stripped_logs {
   "$@" 2>&1 | strip_glog
+  # propagate the exit status, otherwise the test will happily continue on failure
+  return "${PIPESTATUS[0]}"
 }
 
 function wait_for_json_record_count {
@@ -653,7 +654,7 @@ function blobimport {
   local revlog="$input/revlog-export"
   rm -rf "$revlog"
   hg --cwd "$input" debugexportrevlog revlog-export
-  $MONONOKE_BLOBIMPORT \
+  GLOG_minloglevel=5 $MONONOKE_BLOBIMPORT \
     "${CACHE_ARGS[@]}" \
     "${COMMON_ARGS[@]}" \
      --repo-id $REPOID \
@@ -1482,7 +1483,7 @@ function gitimport() {
     git_cmd="git"
   fi
 
-  "$MONONOKE_GITIMPORT" \
+  GLOG_minloglevel=5 "$MONONOKE_GITIMPORT" \
     "${CACHE_ARGS[@]}" \
     "${COMMON_ARGS[@]}" \
     --git-command-path $git_cmd\
@@ -1514,7 +1515,7 @@ function git() {
   GIT_AUTHOR_DATE="${GIT_AUTHOR_DATE:-$date}" \
   GIT_AUTHOR_NAME="$name" \
   GIT_AUTHOR_EMAIL="$email" \
-  command git -c init.defaultBranch=master_bookmark -c protocol.file.allow=always "$@"
+  command git -c transfer.bundleURI=false -c init.defaultBranch=master_bookmark -c protocol.file.allow=always "$@"
 }
 
 function git_set_only_author() {
@@ -1701,7 +1702,7 @@ function packer() {
 }
 
 function check_git_wc() {
-  "$MONONOKE_CHECK_GIT_WC" \
+  GLOG_minloglevel=5 "$MONONOKE_CHECK_GIT_WC" \
     "${CACHE_ARGS[@]}" \
     "${COMMON_ARGS[@]}" \
     --repo-id "$REPOID" \

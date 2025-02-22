@@ -52,7 +52,6 @@ from sapling import (
     extensions,
     localrepo,
     match as matchmod,
-    pycompat,
     scmutil,
     tracing,
     util,
@@ -151,7 +150,7 @@ def getconfigs(wctx) -> sortdict:
     # read from .hgdirsync in repo
     filename = ".hgdirsync"
     try:
-        content = pycompat.decodeutf8(wctx[filename].data())
+        content = wctx[filename].data().decode()
     except (error.ManifestLookupError, IOError, AttributeError, KeyError):
         content = ""
     cfg = bindings.configloader.config()
@@ -208,7 +207,7 @@ def getmirrors(maps, filename):
             if checkpath.startswith(subdir):
                 return None, []
 
-    for key, mirrordirs in maps.items():
+    for mirrordirs in maps.values():
         for subdir in mirrordirs:
             if checkpath.startswith(subdir):
                 return subdir, mirrordirs
@@ -307,14 +306,19 @@ def dirsyncctx(ctx, matcher=None):
 
     This function does not change working copy or dirstate.
     """
+    repo = ctx.repo()
     maps = getconfigs(ctx)
     resultmirrored = set()
     resultctx = ctx
 
     # Do not dirsync if there is nothing to sync.
+    if not maps:
+        repo.ui.note_err(_("dirsync: skipped because dirsync config is empty\n"))
+        return resultctx, resultmirrored
     # Do not dirsync metaedit commits, because they might break assertions in
     # metadataonlyctx (manifest is unchanged).
-    if not maps or (ctx.mutinfo() or {}).get("mutop") == "metaedit":
+    if (ctx.mutinfo() or {}).get("mutop") == "metaedit":
+        repo.ui.note_err(_("dirsync: skipped for metaedit\n"))
         return resultctx, resultmirrored
 
     needsync = configstomatcher(maps)
@@ -324,7 +328,13 @@ def dirsyncctx(ctx, matcher=None):
     else:
         matcher = needsync
 
-    repo = ctx.repo()
+    # skip dirsync if there is no files match the (needsync) matcher
+    if not any(matcher(p) for p in ctx.files()):
+        repo.ui.note_err(
+            _("dirsync: skipped because files paths do not match dirsync config\n")
+        )
+        return resultctx, resultmirrored
+
     mctx, status = _mctxstatus(ctx, matcher)
 
     added = set(status.added)
@@ -339,6 +349,9 @@ def dirsyncctx(ctx, matcher=None):
         for src in paths:
             srcmirror, mirrors = getmirrors(maps, src)
             if not mirrors:
+                repo.ui.debug(
+                    _("dirsync: %s file %s has no mirrored path\n") % (action, src)
+                )
                 continue
 
             dstpaths = []  # [(dstpath, dstmirror)]
@@ -411,6 +424,8 @@ def dirsyncctx(ctx, matcher=None):
 
     if resultmirrored:
         resultctx = mctx
+    else:
+        repo.ui.debug(_("dirsync: no files are mirrored\n"))
 
     return resultctx, resultmirrored
 
@@ -523,6 +538,7 @@ def _adjuststatus(status, ctx1, ctx2, matcher) -> status:
 
 def _commitctx(orig, self, ctx, *args, **kwargs):
     if _disabled[0]:
+        ctx.repo().ui.note_err(_("dirsync: skipped for shelve commands\n"))
         return orig(self, ctx, *args, **kwargs)
 
     ctx, mirrored = dirsyncctx(ctx)

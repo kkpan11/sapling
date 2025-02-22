@@ -65,12 +65,12 @@
   >    "git_merge_rev_id": "2c01e4a5658421e2bfcd08e31d9b69399319bcd3",
   >    "git_repo_path": "${TESTTMP}/repo-git",
   >    "gitimport_bcs_ids": null,
-  >    "hg_sync_check_disabled": true,
   >    "import_stage": "GitImport",
   >    "imported_cs_id": null,
   >    "merged_cs_id": null,
   >    "move_bookmark_commits_done": 0,
   >    "phab_check_disabled": true,
+  >    "print_gitimport_map": false,
   >    "recovery_file_path": "${TESTTMP}/recovery_file.json",
   >    "shifted_bcs_ids": null,
   >    "sleep_time": {
@@ -107,7 +107,7 @@
   * Merging the imported commits into given bookmark, master_bookmark (glob)
   * Done checking path conflicts (glob)
   * Creating a merge bonsai changeset with parents: e32a1e342cdb1e38e88466b4c1a01ae9f410024017aa21dc0a1c5da6b3963bf2, fea472cdf364ad6499f20e5f32c0ba01cb73fda8cab229c24f456df085b17622 (glob)
-  * Created merge bonsai: b3739fb6296e8a65162abc891a120516adc3cbe8ce94acafa65e5f4d93d88293 and changeset: BonsaiChangeset { inner: BonsaiChangesetMut { parents: [ChangesetId(Blake2(e32a1e342cdb1e38e88466b4c1a01ae9f410024017aa21dc0a1c5da6b3963bf2)), ChangesetId(Blake2(fea472cdf364ad6499f20e5f32c0ba01cb73fda8cab229c24f456df085b17622))], author: "user", author_date: DateTime(2005-04-02T21:37:00+01:00), committer: Some("user"), committer_date: Some(DateTime(2005-04-02T21:37:00+01:00)), message: "merging", hg_extra: {}, git_extra_headers: None, file_changes: {}, is_snapshot: false, git_tree_hash: None, git_annotated_tag: None }, id: ChangesetId(Blake2(b3739fb6296e8a65162abc891a120516adc3cbe8ce94acafa65e5f4d93d88293)) } (glob)
+  * Created merge bonsai: b3739fb6296e8a65162abc891a120516adc3cbe8ce94acafa65e5f4d93d88293 and changeset: BonsaiChangeset { inner: BonsaiChangesetMut { parents: [ChangesetId(Blake2(e32a1e342cdb1e38e88466b4c1a01ae9f410024017aa21dc0a1c5da6b3963bf2)), ChangesetId(Blake2(fea472cdf364ad6499f20e5f32c0ba01cb73fda8cab229c24f456df085b17622))], author: "user", author_date: DateTime(2005-04-02T21:37:00+01:00), committer: Some("user"), committer_date: Some(DateTime(2005-04-02T21:37:00+01:00)), message: "merging", hg_extra: {}, git_extra_headers: None, file_changes: {}, is_snapshot: false, git_tree_hash: None, git_annotated_tag: None, subtree_changes: {} }, id: ChangesetId(Blake2(b3739fb6296e8a65162abc891a120516adc3cbe8ce94acafa65e5f4d93d88293)) } (glob)
   * Finished merging (glob)
   * Running pushrebase (glob)
   * Finished pushrebasing to b3739fb6296e8a65162abc891a120516adc3cbe8ce94acafa65e5f4d93d88293 (glob)
@@ -154,13 +154,13 @@
       "260f78ba75e428610060f950dc7b4aa06a81e8b34179a38e6f46492f90c76084",
       "8d76deb176f7a48e0ab67b66cb791c6461406b6e35aedc440f6e4f9e3b27127c"
     ],
-    "hg_sync_check_disabled": true,
     "import_stage": "PushCommit",
     "imported_cs_id": "fea472cdf364ad6499f20e5f32c0ba01cb73fda8cab229c24f456df085b17622",
     "mark_not_synced_mapping": null,
     "merged_cs_id": * (glob)
     "move_bookmark_commits_done": 4,
     "phab_check_disabled": true,
+    "print_gitimport_map": false,
     "recovery_file_path": "$TESTTMP/recovery_file.json",
     "shifted_bcs_ids": [
       "4f830791a5ae7a2981d6c252d2be0bd7ebd3b1090080074b4b4bae6deb250b4a",

@@ -22,10 +22,6 @@ from typing import Union
 
 import bindings
 
-# Do not import anything but pycompat here, please
-from . import pycompat
-
-
 CertificateError = bindings.error.CertificateError
 CommitLookupError = bindings.error.CommitLookupError
 ConfigError = bindings.error.ConfigError
@@ -49,8 +45,8 @@ def _tobytes(exc) -> Union[bytes, str]:
     if not exc.args:
         return b""
     if len(exc.args) == 1:
-        return pycompat.bytestr(exc.args[0])
-    return b"(%s)" % b", ".join(b"'%s'" % pycompat.bytestr(a) for a in exc.args)
+        return str(exc.args[0])
+    return b"(%s)" % b", ".join(b"'%s'" % str(a) for a in exc.args)
 
 
 class Hint:

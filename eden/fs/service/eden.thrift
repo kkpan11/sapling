@@ -7,11 +7,13 @@
 
 include "eden/fs/config/eden_config.thrift"
 include "fb303/thrift/fb303_core.thrift"
-include "thrift/annotation/thrift.thrift"
 include "thrift/annotation/cpp.thrift"
+include "thrift/annotation/rust.thrift"
+include "thrift/annotation/thrift.thrift"
 
 namespace cpp2 facebook.eden
 namespace java com.facebook.eden.thrift
+namespace java.swift com.facebook.eden.thrift
 namespace py facebook.eden
 namespace py3 eden.fs.service
 namespace hack edenfs.service
@@ -250,6 +252,11 @@ struct MountArgument {
   3: bool readOnly;
 }
 
+struct UnmountArgument {
+  1: MountId mountId;
+  2: bool useForce = true;
+}
+
 union SHA1Result {
   1: BinaryHash sha1;
   2: EdenError error;
@@ -486,7 +493,8 @@ union FileAttributeDataOrErrorV2 {
  * in a certain directory.
  */
 union DirListAttributeDataOrError {
-  1: map_PathString_FileAttributeDataOrErrorV2_3516 dirListAttributeData;
+  @rust.Type{name = "sorted_vector_map::SortedVectorMap"}
+  1: map<PathString, FileAttributeDataOrErrorV2> dirListAttributeData;
   2: EdenError error;
 }
 
@@ -1487,8 +1495,8 @@ struct MountAccesses {
 struct GetAccessCountsResult {
   1: map<pid_t, binary> cmdsByPid;
   2: map<PathString, MountAccesses> accessesByMount;
-// TODO: Count the number of thrift requests
-// 3: map<pid_t, AccessCount> thriftAccesses
+  // TODO: Count the number of thrift requests
+  // 3: map<pid_t, AccessCount> thriftAccesses
 }
 
 enum TracePointEvent {
@@ -1960,10 +1968,64 @@ struct ChangesSinceV2Params {
   7: optional list<string> excludedSuffixes;
 }
 
+/*
+ * Return value of the startFileAccessMonitor API
+ *
+ * pid - The process ID for the started File Access Monitor(FAM) binary if started
+ *   successfully.
+ *
+ * tmpOutputPath - The path of FAM output file
+ */
+struct StartFileAccessMonitorResult {
+  1: pid_t pid;
+  2: PathString tmpOutputPath;
+}
+
+/*
+ * Return value of the stopFileAccessMonitor API
+ *
+ * tmpOutputPath - The path to the file which file access events are dumped to.
+ *
+ * specifiedOutputPath - If set, it tells the caller if a specified output path was provided.
+ *
+ * shouldUpload - It tells the caller if FAM is started with the request to upload the output file.
+ */
+struct StopFileAccessMonitorResult {
+  1: PathString tmpOutputPath;
+  2: PathString specifiedOutputPath;
+  3: bool shouldUpload;
+}
+
+/**
+ * Argument to startFileAccessMonitor API
+ *
+ * paths - A list of paths monitored by File Access Monitor(FAM).
+ *
+ * specifiedOutputPath - If provided, this is the destination where the file written
+ *   by FAM will be moved to. This is only stored as part of the state of FAM. No
+ *   writes will be made to this path.
+ *
+ * shouldUpload - It indicates if the output file should be uploaded. This is only
+ *   stored as part of the state of FAM.
+ */
+struct StartFileAccessMonitorParams {
+  1: list<PathString> paths;
+  2: optional PathString specifiedOutputPath;
+  3: bool shouldUpload;
+}
+
+struct SendNotificationResponse {}
+
+struct SendNotificationRequest {
+  1: string title;
+  2: string description;
+}
+
 service EdenService extends fb303_core.BaseService {
   list<MountInfo> listMounts() throws (1: EdenError ex);
   void mount(1: MountArgument info) throws (1: EdenError ex);
   void unmount(1: PathString mountPoint) throws (1: EdenError ex);
+  void unmountV2(1: UnmountArgument unmountArgument) throws (1: EdenError ex);
 
   /**
    * Potentially check out the specified snapshot, reporting conflicts (and
@@ -2807,13 +2869,24 @@ service EdenService extends fb303_core.BaseService {
   ChangesSinceV2Result changesSinceV2(1: ChangesSinceV2Params params) throws (
     1: EdenError ex,
   );
-}
 
-// The following were automatically generated and may benefit from renaming.
-@thrift.DeprecatedUnvalidatedAnnotations{
-  items = {"rust.type": "sorted_vector_map::SortedVectorMap"},
+  StartFileAccessMonitorResult startFileAccessMonitor(
+    1: StartFileAccessMonitorParams params,
+  ) throws (1: EdenError ex);
+
+  StopFileAccessMonitorResult stopFileAccessMonitor() throws (1: EdenError ex);
+
+  /**
+  * Ask the server to send a notification to the user via the Notifier.
+  *
+  * Note that only Windows has a Notifier implementation. This is a no-op on other platforms.
+  */
+  /**
+  * Ask the server to send a notification to the user via the Notifier.
+  *
+  * Note that only Windows has a Notifier implementation. This is a no-op on other platforms.
+  */
+  SendNotificationResponse sendNotification(
+    1: SendNotificationRequest request,
+  ) throws (1: EdenError ex);
 }
-typedef map<
-  PathString,
-  FileAttributeDataOrErrorV2
-> map_PathString_FileAttributeDataOrErrorV2_3516

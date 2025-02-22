@@ -15,7 +15,6 @@ from sapling import (
     extensions,
     mdiff,
     patch,
-    pycompat,
     registrar,
     revset,
     scmutil,
@@ -25,7 +24,6 @@ from sapling.i18n import _
 from sapling.node import hex
 
 from .extlib.phabricator import arcconfig, diffprops, graphql
-
 
 hint = registrar.hint()
 revsetpredicate = registrar.revsetpredicate()
@@ -106,7 +104,7 @@ def _diff2o(ui, repo, rev1, rev2, *pats, **opts) -> None:
         changelines = []
         i = 0
         while i < len(hunklines):
-            line = pycompat.decodeutf8(hunklines[i], errors="replace")
+            line = hunklines[i].decode(errors="replace")
             i += 1
             if line[:2] == "++":
                 changelines.append("+" + line[2:])

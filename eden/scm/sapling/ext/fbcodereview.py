@@ -29,9 +29,11 @@ Config::
     hide-landed-commits = true
 """
 
+import os
 import re
 import socket
 import ssl
+import sys
 from typing import Any, List, Optional, Pattern, Sized
 
 from sapling import (
@@ -44,8 +46,6 @@ from sapling import (
     mutation,
     namespaces,
     node,
-    phases,
-    pycompat,
     registrar,
     revset,
     scmutil,
@@ -259,7 +259,7 @@ def getdiffstatus(repo, *diffid):
     batchsize = repo.ui.configint("fbcodereview", "max-diff-count", 50)
 
     try:
-        client = graphql.Client(repodir=pycompat.getcwd(), repo=repo)
+        client = graphql.Client(repodir=os.getcwd(), repo=repo)
         statuses = {}
         # Limit how many we request at once to avoid timeouts.
         # Use itertools.batched once we are on Python 3.12.
@@ -991,7 +991,7 @@ def graphqlgetdiff(repo, diffid):
             }
     timeout = repo.ui.configint("ssl", "timeout", 10)
     try:
-        client = graphql.Client(repodir=pycompat.getcwd(), repo=repo)
+        client = graphql.Client(repodir=os.getcwd(), repo=repo)
         return client.getdifflatestversion(timeout, diffid)
     except Exception as e:
         raise error.Abort(
@@ -1036,7 +1036,7 @@ def localgetdiff(repo, diffid):
     # plan to remove it at some point.
     repo.ui.log(
         "features",
-        fullargs=repr(pycompat.sysargv),
+        fullargs=repr(sys.argv),
         feature="phrevset-full-changelog-scan",
     )
     for rev in repo.changelog.revs(start=len(repo.changelog), stop=0):

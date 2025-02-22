@@ -37,6 +37,7 @@ pub struct NoBadFilenamesConfig {
     illegal_filename_message: String,
 }
 
+#[cfg(fbcode_build)]
 impl NoBadFilenamesConfig {
     pub fn new(
         allowlist_regex: Option<&str>,
@@ -116,8 +117,8 @@ mod test {
     use borrowed::borrowed;
     use fbinit::FacebookInit;
     use hook_manager::HookRepo;
+    use hook_manager_testlib::HookTestRepo;
     use mononoke_macros::mononoke;
-    use tests_utils::BasicTestRepo;
     use tests_utils::CreateCommitContext;
 
     use super::*;
@@ -141,7 +142,7 @@ mod test {
     #[mononoke::fbinit_test]
     async fn test_no_bad_filenames_hook_basic(fb: FacebookInit) -> Result<(), Error> {
         let ctx = CoreContext::test_mock(fb);
-        let repo: BasicTestRepo = test_repo_factory::build_empty(ctx.fb).await?;
+        let repo: HookTestRepo = test_repo_factory::build_empty(ctx.fb).await?;
         borrowed!(ctx, repo);
         let hook_repo = HookRepo::build_from(&repo);
         let cs_id = CreateCommitContext::new_root(ctx, repo)
@@ -173,7 +174,7 @@ mod test {
     #[mononoke::fbinit_test]
     async fn test_no_bad_filenames_hook_illegal_filenames(fb: FacebookInit) -> Result<(), Error> {
         let ctx = CoreContext::test_mock(fb);
-        let repo: BasicTestRepo = test_repo_factory::build_empty(ctx.fb).await?;
+        let repo: HookTestRepo = test_repo_factory::build_empty(ctx.fb).await?;
         borrowed!(ctx, repo);
         let hook_repo = HookRepo::build_from(&repo);
         // Illegal file names
@@ -223,7 +224,7 @@ mod test {
         fb: FacebookInit,
     ) -> Result<(), Error> {
         let ctx = CoreContext::test_mock(fb);
-        let repo: BasicTestRepo = test_repo_factory::build_empty(ctx.fb).await?;
+        let repo: HookTestRepo = test_repo_factory::build_empty(ctx.fb).await?;
         borrowed!(ctx, repo);
         let hook_repo = HookRepo::build_from(&repo);
         // Illegal file names
@@ -258,7 +259,7 @@ mod test {
         fb: FacebookInit,
     ) -> Result<(), Error> {
         let ctx = CoreContext::test_mock(fb);
-        let repo: BasicTestRepo = test_repo_factory::build_empty(ctx.fb).await?;
+        let repo: HookTestRepo = test_repo_factory::build_empty(ctx.fb).await?;
         borrowed!(ctx, repo);
         let hook_repo = HookRepo::build_from(&repo);
         // Illegal file names

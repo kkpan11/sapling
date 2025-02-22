@@ -5,6 +5,8 @@
  * GNU General Public License version 2.
  */
 
+use std::collections::HashMap;
+
 use anyhow::anyhow;
 use anyhow::Error;
 use anyhow::Result;
@@ -22,6 +24,7 @@ use derived_data_service_if as thrift;
 use futures::stream::TryStreamExt;
 use manifest::find_intersection_of_diffs;
 use manifest::Entry;
+use mononoke_macros::mononoke;
 use mononoke_types::BonsaiChangeset;
 use mononoke_types::ChangesetId;
 use mononoke_types::FileUnodeId;
@@ -84,6 +87,7 @@ impl BonsaiDerivable for RootFastlog {
         derivation_ctx: &DerivationContext,
         bonsai: BonsaiChangeset,
         _parents: Vec<Self>,
+        _known: Option<&HashMap<ChangesetId, Self>>,
     ) -> Result<Self, Error> {
         let bcs_id = bonsai.get_changeset_id();
         let unode_mf_id = derivation_ctx
@@ -104,7 +108,7 @@ impl BonsaiDerivable for RootFastlog {
             .map_ok(move |(_, entry)| {
                 cloned!(blobstore, ctx);
                 async move {
-                    tokio::spawn(async move {
+                    mononoke::spawn_task(async move {
                         let parents = fetch_unode_parents(&ctx, &blobstore, entry).await?;
 
                         let fastlog_batch =

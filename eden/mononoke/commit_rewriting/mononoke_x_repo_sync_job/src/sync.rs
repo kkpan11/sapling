@@ -97,7 +97,9 @@ where
     log_info(ctx, format!("processing log entry #{}", entry.id));
     let source_bookmark = Source(entry.bookmark_name);
     let target_bookmark = Target(
-        commit_syncer.get_bookmark_renamer().boxed().await?(&source_bookmark)
+        commit_syncer
+            .rename_bookmark(&source_bookmark)
+            .await?
             .ok_or_else(|| format_err!("unexpected empty bookmark rename"))?,
     );
     scuba_sample
@@ -535,6 +537,7 @@ where
                 parent_mapping_selection_hint,
                 CommitSyncContext::XRepoSyncJob,
                 Some(version.clone()),
+                false, // add_mapping_to_hg_extra
             )
             .timed()
             .await
@@ -567,6 +570,7 @@ pub async fn sync_commits_for_initial_import<R>(
     disable_progress_bar: bool,
     no_automatic_derivation: bool,
     derivation_batch_size: usize,
+    add_mapping_to_hg_extra: bool,
 ) -> Result<Vec<ChangesetId>>
 where
     R: Repo,
@@ -663,6 +667,7 @@ where
                 CandidateSelectionHint::Only,
                 CommitSyncContext::ForwardSyncerInitialImport,
                 Some(config_version.clone()),
+                add_mapping_to_hg_extra,
             )
             .timed()
             .boxed()
@@ -725,6 +730,7 @@ where
             CandidateSelectionHint::Only,
             CommitSyncContext::ForwardSyncerInitialImport,
             Some(config_version),
+            add_mapping_to_hg_extra,
         )
         .timed()
         .boxed()

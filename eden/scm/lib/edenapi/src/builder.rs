@@ -137,11 +137,14 @@ pub struct HttpClientBuilder {
     max_commit_translate_id_per_batch: Option<usize>,
     min_batch_size: Option<usize>,
     timeout: Option<Duration>,
+    connect_timeout: Option<Duration>,
+    handler_timeouts: HashMap<String, Duration>,
     debug: bool,
     http_version: Option<HttpVersion>,
     log_dir: Option<PathBuf>,
     encoding: Option<Encoding>,
     min_transfer_speed: Option<MinTransferSpeed>,
+    handler_min_transfer_speeds: HashMap<String, MinTransferSpeed>,
     max_retry_per_request: usize,
     http_config: http_client::Config,
 }
@@ -216,7 +219,21 @@ impl HttpClientBuilder {
         let max_commit_translate_id_per_batch =
             get_config(config, "edenapi", "maxcommittranslateid")?;
 
-        let timeout = get_config(config, "edenapi", "timeout")?.map(Duration::from_secs);
+        let timeout: Option<Duration> = get_config(config, "edenapi", "timeout")?;
+        let connect_timeout: Option<Duration> = get_config(config, "edenapi", "connect-timeout")?;
+
+        let handler_timeouts: HashMap<String, Duration> = config
+            .keys_prefixed("edenapi", "timeout.")
+            .into_iter()
+            .filter_map(
+                |key| match get_config::<Duration>(config, "edenapi", &key) {
+                    Err(err) => Some(Err(err)),
+                    Ok(Some(value)) => Some(Ok((key.strip_prefix("timeout.")?.to_string(), value))),
+                    Ok(None) => None,
+                },
+            )
+            .collect::<Result<_, _>>()?;
+
         let debug = get_config(config, "edenapi", "debug")?.unwrap_or_default();
         let http_version =
             get_config(config, "edenapi", "http-version")?.unwrap_or_else(|| "2".to_string());
@@ -233,16 +250,48 @@ impl HttpClientBuilder {
         let log_dir = get_config(config, "edenapi", "logdir")?;
         let encoding =
             get_config::<String>(config, "edenapi", "encoding")?.map(|s| Encoding::from(&*s));
-        let low_speed_grace_period =
-            get_config::<u64>(config, "edenapi", "low-speed-grace-period-seconds")?
-                .unwrap_or_default();
+
+        let low_speed_window: Duration = match get_config(config, "edenapi", "low-speed-window")? {
+            Some(window) => window,
+            None => {
+                get_config(config, "edenapi", "low-speed-grace-period-seconds")?.unwrap_or_default()
+            }
+        };
         let min_transfer_speed =
             get_config::<u32>(config, "edenapi", "low-speed-min-bytes-per-second")?.map(
                 |min_bytes_per_second| MinTransferSpeed {
                     min_bytes_per_second,
-                    grace_period: Duration::from_secs(low_speed_grace_period),
+                    window: low_speed_window,
                 },
             );
+
+        let handler_min_transfer_speeds: HashMap<String, MinTransferSpeed> = config
+            .keys_prefixed("edenapi", "low-speed-min-bytes-per-second.")
+            .into_iter()
+            .filter_map(|key| {
+                let handler = key.strip_prefix("low-speed-min-bytes-per-second.")?;
+                match get_config(config, "edenapi", &key) {
+                    Err(err) => Some(Err(err)),
+                    Ok(Some(value)) => Some(Ok((
+                        handler.to_string(),
+                        MinTransferSpeed {
+                            min_bytes_per_second: value,
+                            window: match get_config(
+                                config,
+                                "edenapi",
+                                &format!("low-speed-window.{handler}"),
+                            ) {
+                                Err(err) => return Some(Err(err)),
+                                Ok(Some(window)) => window,
+                                Ok(None) => Duration::default(),
+                            },
+                        },
+                    ))),
+                    Ok(None) => None,
+                }
+            })
+            .collect::<Result<_, _>>()?;
+
         let max_retry_per_request =
             get_config::<usize>(config, "edenapi", "max-retry-per-request")?.unwrap_or(3);
 
@@ -264,11 +313,14 @@ impl HttpClientBuilder {
             max_commit_translate_id_per_batch,
             min_batch_size,
             timeout,
+            connect_timeout,
+            handler_timeouts,
             debug,
             http_version,
             log_dir,
             encoding,
             min_transfer_speed,
+            handler_min_transfer_speeds,
             max_retry_per_request,
             http_config,
         };
@@ -430,13 +482,16 @@ pub(crate) struct Config {
     pub(crate) max_commit_mutations_per_batch: Option<usize>,
     pub(crate) max_commit_translate_id_per_batch: Option<usize>,
     pub(crate) min_batch_size: Option<usize>,
+    pub(crate) connect_timeout: Option<Duration>,
     pub(crate) timeout: Option<Duration>,
+    pub(crate) handler_timeouts: HashMap<String, Duration>,
     #[allow(dead_code)]
     pub(crate) debug: bool,
     pub(crate) http_version: Option<HttpVersion>,
     pub(crate) log_dir: Option<PathBuf>,
     pub(crate) encoding: Option<Encoding>,
     pub(crate) min_transfer_speed: Option<MinTransferSpeed>,
+    pub(crate) handler_min_transfer_speeds: HashMap<String, MinTransferSpeed>,
     pub(crate) max_retry_per_request: usize,
     pub(crate) http_config: http_client::Config,
 }
@@ -458,12 +513,15 @@ impl TryFrom<HttpClientBuilder> for Config {
             max_commit_mutations_per_batch,
             max_commit_translate_id_per_batch,
             min_batch_size,
+            connect_timeout,
             timeout,
+            handler_timeouts,
             debug,
             http_version,
             log_dir,
             encoding,
             min_transfer_speed,
+            handler_min_transfer_speeds,
             max_retry_per_request,
             http_config,
         } = builder;
@@ -497,12 +555,15 @@ impl TryFrom<HttpClientBuilder> for Config {
             max_commit_mutations_per_batch,
             max_commit_translate_id_per_batch,
             min_batch_size,
+            connect_timeout,
             timeout,
+            handler_timeouts,
             debug,
             http_version,
             log_dir,
             encoding,
             min_transfer_speed,
+            handler_min_transfer_speeds,
             max_retry_per_request,
             http_config,
         })

@@ -44,8 +44,7 @@
 # Start up the Mononoke Git Service
   $ mononoke_git_service
 # Clone the Git repo from Mononoke
-  $ git_client clone $MONONOKE_GIT_SERVICE_BASE_URL/$REPONAME.git
-  Cloning into 'repo'...
+  $ quiet git_client clone $MONONOKE_GIT_SERVICE_BASE_URL/$REPONAME.git  
   $ cd repo
 
 
@@ -78,7 +77,7 @@
   $ wait_for_git_bookmark_create refs/tags/past_tag
 
 # Verify the timed futures logged with log tags show up in scuba logs
-  $ jq .normal "$SCUBA" | grep -e "Packfile" -e "GitImport" -e "Bookmark movement" -e "Prerequisite" -e "Objects" -e "Prefetched" -e "Content Blob" -e "Bonsai Changeset" -e "Finalize Batch" | sort
+  $ jq .normal "$SCUBA" | grep -e "Packfile" -e "GitImport" -e "Bookmark movement" -e "Prerequisite" -e "Objects" -e "Prefetched" -e "Content Blob" -e "Bonsai Changeset" -e "Finalize Batch" -e "Push" -e "Import" | sort
     "log_tag": "Bookmark movement completed",
     "log_tag": "Completed Bonsai Changeset creation for all commits",
     "log_tag": "Completed Finalize Batch for all commits",
@@ -96,3 +95,20 @@
     "log_tag": "Uploaded Content Blob, Git Blob, Commits and Trees",
     "log_tag": "Uploaded Content Blob, Git Blob, Commits and Trees",
     "log_tag": "Verified Packfile Checksum",
+    "msg": "Import",
+    "msg": "Import",
+    "msg": "Import",
+    "msg": "Import",
+    "msg": "Import",
+    "msg": "Import",
+    "msg": "Import",
+    "msg": "Import",
+    "msg": "Import",
+    "msg": "Import",
+    "msg": "Push",
+    "msg": "Push",
+    "msg": "Push",
+    "msg": "Push",
+    "msg": "Push",
+    "msg": "Push",
+    "msg": "Push",

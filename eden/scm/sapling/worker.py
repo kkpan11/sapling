@@ -13,10 +13,11 @@
 from __future__ import absolute_import
 
 import os
+import queue as queuemod
 import threading
 import time
 
-from . import encoding, error, pycompat, util
+from . import encoding, error, util
 from .i18n import _
 
 
@@ -54,7 +55,7 @@ def _numworkers(ui):
     return min(max(countcpus(), 4), 32)
 
 
-if pycompat.isposix or pycompat.iswindows:
+if util.isposix or util.iswindows:
     _startupcost = 0.01
 else:
     _startupcost = 1e30
@@ -131,7 +132,7 @@ def _threadedworker(ui, func, staticargs, args):
                             # iteration.
                             if self._interrupted:
                                 return
-                    except util.empty:
+                    except queuemod.Empty:
                         break
             except Exception as e:
                 # store the exception such that the main thread can resurface
@@ -160,8 +161,8 @@ def _threadedworker(ui, func, staticargs, args):
                 return
 
     workers = _numworkers(ui)
-    resultqueue = util.queue()
-    taskqueue = util.queue()
+    resultqueue = queuemod.Queue()
+    taskqueue = queuemod.Queue()
     # partition work to more pieces than workers to minimize the chance
     # of uneven distribution of large tasks between the workers
     for pargs in partition(args, workers * 20):

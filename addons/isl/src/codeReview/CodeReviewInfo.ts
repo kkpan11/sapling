@@ -5,9 +5,13 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-import type {DiffId, DiffSummary, Hash, PageVisibility, RepoInfo, Result} from '../types';
+import type {DiffId, DiffSummary, Hash, PageVisibility, Result, ValidatedRepoInfo} from '../types';
 import type {UICodeReviewProvider} from './UICodeReviewProvider';
 
+import {atom} from 'jotai';
+import {clearTrackedCache} from 'shared/LRU';
+import {debounce} from 'shared/debounce';
+import {firstLine, nullthrows} from 'shared/utils';
 import serverAPI from '../ClientToServerAPI';
 import {commitMessageTemplate} from '../CommitInfoView/CommitInfoState';
 import {
@@ -24,18 +28,14 @@ import {dagWithPreviews} from '../previews';
 import {commitByHash, repositoryInfo} from '../serverAPIState';
 import {registerCleanup, registerDisposable} from '../utils';
 import {GithubUICodeReviewProvider} from './github/github';
-import {atom} from 'jotai';
-import {clearTrackedCache} from 'shared/LRU';
-import {debounce} from 'shared/debounce';
-import {firstLine, nullthrows} from 'shared/utils';
 
 export const codeReviewProvider = atom<UICodeReviewProvider | null>(get => {
   const repoInfo = get(repositoryInfo);
   return repoInfoToCodeReviewProvider(repoInfo);
 });
 
-function repoInfoToCodeReviewProvider(repoInfo?: RepoInfo): UICodeReviewProvider | null {
-  if (repoInfo?.type !== 'success') {
+function repoInfoToCodeReviewProvider(repoInfo?: ValidatedRepoInfo): UICodeReviewProvider | null {
+  if (repoInfo == null) {
     return null;
   }
   if (repoInfo.codeReviewSystem.type === 'github') {

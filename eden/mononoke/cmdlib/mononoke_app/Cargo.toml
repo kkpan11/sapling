@@ -41,12 +41,13 @@ metaconfig_parser = { version = "0.1.0", path = "../../metaconfig/parser" }
 metaconfig_types = { version = "0.1.0", path = "../../metaconfig/types" }
 mononoke_api = { version = "0.1.0", path = "../../mononoke_api" }
 mononoke_configs = { version = "0.1.0", path = "../../mononoke_configs" }
+mononoke_macros = { version = "0.1.0", path = "../../mononoke_macros" }
 mononoke_repos = { version = "0.1.0", path = "../../mononoke_repos" }
 mononoke_types = { version = "0.1.0", path = "../../mononoke_types" }
 permission_checker = { version = "0.1.0", path = "../../permission_checker" }
 prefixblob = { version = "0.1.0", path = "../../blobstore/prefixblob" }
 redactedblobstore = { version = "0.1.0", path = "../../blobstore/redactedblobstore" }
-regex = "1.9.2"
+regex = "1.11.1"
 rendezvous = { version = "0.1.0", path = "../../common/rendezvous" }
 repo_factory = { version = "0.1.0", path = "../../repo_factory" }
 running = { version = "0.1.0", path = "../../common/running" }
@@ -54,7 +55,7 @@ sapling-clientinfo = { version = "0.1.0", path = "../../../scm/lib/clientinfo" }
 scuba_ext = { version = "0.1.0", path = "../../common/scuba_ext" }
 services = { version = "0.1.0", git = "https://github.com/facebookexperimental/rust-shed.git", branch = "main" }
 shutdown_timeout = { version = "0.1.0", path = "shutdown_timeout" }
-slog = { version = "2.7", features = ["max_level_trace", "nested-values"] }
+slog = { package = "tracing_slog_compat", version = "0.1.0", git = "https://github.com/facebookexperimental/rust-shed.git", branch = "main" }
 sql_ext = { version = "0.1.0", path = "../../common/rust/sql_ext" }
 stats = { version = "0.1.0", git = "https://github.com/facebookexperimental/rust-shed.git", branch = "main" }
 strum = { version = "0.26.2", features = ["derive"] }

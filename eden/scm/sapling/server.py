@@ -13,11 +13,11 @@
 from __future__ import absolute_import
 
 import os
+import sys
 import tempfile
 
-from . import chgserver, commandserver, error, pycompat, util
+from . import chgserver, commandserver, error, util
 from .i18n import _
-from .pycompat import range
 
 
 def runservice(
@@ -50,7 +50,7 @@ def runservice(
             util.tryunlink(portpath)
         try:
             if not runargs:
-                runargs = util.hgcmd() + pycompat.sysargv[1:]
+                runargs = util.hgcmd() + sys.argv[1:]
             runargs.append("--daemon-postexec=unlink:%s" % lockpath)
             # Don't pass --cwd to the child process, because we've already
             # changed directory.

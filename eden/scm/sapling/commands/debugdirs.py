@@ -5,7 +5,7 @@
 
 from __future__ import absolute_import
 
-from .. import pycompat, scmutil, util
+from .. import scmutil, util
 from ..i18n import _
 from . import debug
 from .cmdtable import command
@@ -40,7 +40,7 @@ def debugdirs(ui, repo, *dirs, **opts) -> None:
     else:
         candidates = {d.strip("/"): d for d in dirs}
         matches = set()
-        for f in pycompat.iterkeys(ctx.manifest()):
+        for f in ctx.manifest().keys():
             for p in util.finddirs(f):
                 if p in candidates:
                     matches.add(candidates.pop(p))

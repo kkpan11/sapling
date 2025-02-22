@@ -10,7 +10,7 @@ use mononoke_types::prefix_tree::PrefixTree;
 use mononoke_types::MPathElement;
 use mononoke_types::NonRootMPath;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PathTree<V> {
     pub value: V,
     pub subentries: PrefixTree<Self>,
@@ -42,6 +42,31 @@ impl<V> PathTree<V> {
             }
         }
         Some(&tree.value)
+    }
+
+    /// Returns the nearest parent that satisfies the predicate, or None if no parent does.
+    pub fn get_nearest_parent(
+        &self,
+        path: &MPath,
+        pred: impl Fn(&V) -> bool,
+    ) -> Option<(MPath, &V)> {
+        let mut ret = pred(&self.value).then_some((0, &self.value));
+        let mut tree = self;
+        for (idx, elem) in path.iter().enumerate() {
+            match tree.subentries.get(elem.as_ref()) {
+                Some(subtree) => {
+                    if pred(&subtree.value) {
+                        ret = Some((idx + 1, &subtree.value));
+                    }
+                    tree = subtree;
+                }
+                None => break,
+            }
+        }
+        ret.and_then(|(len, value)| {
+            let path = path.take_prefix_components(len).ok()?;
+            Some((path, value))
+        })
     }
 }
 

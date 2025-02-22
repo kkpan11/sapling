@@ -7,17 +7,8 @@
 
 from __future__ import absolute_import
 
-from sapling import (
-    autopull,
-    error,
-    mutation,
-    node as nodemod,
-    pycompat,
-    registrar,
-    visibility,
-)
+from sapling import autopull, error, mutation, node as nodemod, registrar, visibility
 from sapling.i18n import _
-
 
 cmdtable = {}
 command = registrar.command(cmdtable)
@@ -92,7 +83,7 @@ def unamend(ui, repo, **opts):
         cm = predctx.manifest()
         dirstate = repo.dirstate
         diff = cm.diff(wm)
-        changedfiles.extend(pycompat.iterkeys(diff))
+        changedfiles.extend(diff.keys())
 
         tr = repo.transaction("unamend")
         with dirstate.parentchange():

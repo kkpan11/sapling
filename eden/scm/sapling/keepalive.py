@@ -92,17 +92,15 @@ from __future__ import absolute_import, print_function
 import email
 import errno
 import hashlib
+import http.client as httplib
 import socket
 import sys
 import threading
 from typing import List
 
-from . import pycompat, urllibcompat, util
+from . import urllibcompat, util
 from .i18n import _
 
-
-# pyre-fixme[11]: Annotation `client` is not defined as a type.
-httplib = util.httplib
 urlerr = util.urlerr
 urlreq = util.urlreq
 

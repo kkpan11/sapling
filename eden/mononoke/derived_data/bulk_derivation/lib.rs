@@ -34,9 +34,9 @@ use futures::StreamExt;
 use futures::TryStreamExt;
 use git_types::MappedGitCommitId;
 use git_types::RootGitDeltaManifestV2Id;
-use git_types::TreeHandle;
 use mercurial_derivation::MappedHgChangesetId;
 use mercurial_derivation::RootHgAugmentedManifestId;
+use mononoke_macros::mononoke;
 use mononoke_types::ChangesetId;
 use skeleton_manifest::RootSkeletonManifestId;
 use skeleton_manifest_v2::RootSkeletonManifestV2Id;
@@ -327,7 +327,6 @@ fn manager_for_type(
             Arc::new(SingleTypeManager::<RootContentManifestId>::new(manager))
         }
         DerivableType::ChangesetInfo => Arc::new(SingleTypeManager::<ChangesetInfo>::new(manager)),
-        DerivableType::GitTrees => Arc::new(SingleTypeManager::<TreeHandle>::new(manager)),
         DerivableType::GitCommits => Arc::new(SingleTypeManager::<MappedGitCommitId>::new(manager)),
         DerivableType::GitDeltaManifestsV2 => {
             Arc::new(SingleTypeManager::<RootGitDeltaManifestV2Id>::new(manager))
@@ -362,7 +361,7 @@ impl BulkDerivation for DerivedDataManager {
                 let csids = csids.to_vec();
                 let manager = manager_for_type(self, *derived_data_type);
                 async move {
-                    tokio::spawn(async move {
+                    mononoke::spawn_task(async move {
                         manager
                             .derive_heads_with_visited(
                                 ctx,

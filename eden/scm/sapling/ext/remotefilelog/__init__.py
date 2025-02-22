@@ -92,6 +92,7 @@ Configs:
 from __future__ import absolute_import
 
 import os
+import sys
 import time
 from contextlib import contextmanager
 
@@ -123,7 +124,6 @@ from sapling import (
 from sapling.commands import debug as hgdebugcommands
 from sapling.extensions import wrapfunction
 from sapling.i18n import _
-from sapling.pycompat import isint, sysplatform
 
 from . import (
     debugcommands,
@@ -417,7 +417,7 @@ def onetimeclientsetup(ui):
         cachedelta=None,
         _metatuple=None,
     ):
-        if isint(link):
+        if isinstance(link, int):
             pendingfilecommits.append(
                 (
                     self,
@@ -665,7 +665,7 @@ def gc(ui, repo, *args, **opts):
     """garbage collect the client caches"""
     ui.warn(_("@prog@ gc is no longer supported."))
 
-    if not sysplatform.startswith("win"):
+    if not sys.platform.startswith("win"):
         cachepath = ui.config("remotefilelog", "cachepath")
 
         if cachepath:

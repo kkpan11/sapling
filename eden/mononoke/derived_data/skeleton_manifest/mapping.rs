@@ -14,12 +14,19 @@ use async_trait::async_trait;
 use blobstore::Blobstore;
 use blobstore::BlobstoreGetData;
 use bytes::Bytes;
+use cloned::cloned;
 use context::CoreContext;
 use derived_data_manager::dependencies;
 use derived_data_manager::BonsaiDerivable;
 use derived_data_manager::DerivableType;
 use derived_data_manager::DerivationContext;
 use derived_data_service_if as thrift;
+use futures::stream;
+use futures::FutureExt;
+use futures::StreamExt;
+use futures::TryStreamExt;
+use manifest::ManifestOps;
+use manifest::ManifestParentReplacement;
 use mononoke_types::BlobstoreBytes;
 use mononoke_types::BonsaiChangeset;
 use mononoke_types::ChangesetId;
@@ -29,7 +36,7 @@ use mononoke_types::NonRootMPath;
 use mononoke_types::SkeletonManifestId;
 
 use crate::batch::derive_skeleton_manifests_in_batch;
-use crate::derive::derive_skeleton_manifest;
+use crate::derive::derive_skeleton_manifest_with_subtree_changes;
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct RootSkeletonManifestId(pub(crate) SkeletonManifestId);
@@ -85,8 +92,11 @@ impl BonsaiDerivable for RootSkeletonManifestId {
         derivation_ctx: &DerivationContext,
         bonsai: BonsaiChangeset,
         parents: Vec<Self>,
+        known: Option<&HashMap<ChangesetId, Self>>,
     ) -> Result<Self, Error> {
-        let id = derive_skeleton_manifest(
+        let subtree_changes =
+            get_skeleton_manifest_subtree_changes(ctx, derivation_ctx, known, &bonsai).await?;
+        let id = derive_skeleton_manifest_with_subtree_changes(
             ctx,
             derivation_ctx,
             parents
@@ -94,6 +104,7 @@ impl BonsaiDerivable for RootSkeletonManifestId {
                 .map(RootSkeletonManifestId::into_skeleton_manifest_id)
                 .collect(),
             get_file_changes(&bonsai),
+            subtree_changes,
         )
         .await?;
         Ok(RootSkeletonManifestId(id))
@@ -172,6 +183,51 @@ pub fn get_file_changes(
             )
         })
         .collect()
+}
+
+pub async fn get_skeleton_manifest_subtree_changes(
+    ctx: &CoreContext,
+    derivation_ctx: &DerivationContext,
+    known: Option<&HashMap<ChangesetId, RootSkeletonManifestId>>,
+    bcs: &BonsaiChangeset,
+) -> Result<Vec<ManifestParentReplacement<SkeletonManifestId, ()>>> {
+    let copy_sources = bcs
+        .subtree_changes()
+        .iter()
+        .filter_map(|(path, change)| {
+            let (from_cs_id, from_path) = change.copy_source()?;
+            Some((path, from_cs_id, from_path))
+        })
+        .collect::<Vec<_>>();
+    stream::iter(copy_sources)
+        .map(|(path, from_cs_id, from_path)| {
+            cloned!(ctx);
+            let blobstore = derivation_ctx.blobstore().clone();
+            async move {
+                let root = derivation_ctx
+                    .fetch_unknown_dependency::<RootSkeletonManifestId>(&ctx, known, from_cs_id)
+                    .await?
+                    .into_skeleton_manifest_id();
+                let entry = root
+                    .find_entry(ctx, blobstore, from_path.clone())
+                    .await?
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "Subtree copy source {} does not exist in {}",
+                            from_path,
+                            from_cs_id
+                        )
+                    })?;
+                Ok(ManifestParentReplacement {
+                    path: path.clone(),
+                    replacements: vec![entry],
+                })
+            }
+        })
+        .buffered(100)
+        .try_collect()
+        .boxed()
+        .await
 }
 
 #[cfg(test)]

@@ -11,17 +11,15 @@ import os
 import stat as statmod
 import time
 
-from sapling import pycompat, util
+from sapling import util
 from sapling.i18n import _
-from sapling.pycompat import range
-
 
 # The amount of time to wait between checking for new packs. This prevents an
 # exception when data is moved to a new pack after the process has already
 # loaded the pack list.
 REFRESHRATE = 0.1
 
-if pycompat.isposix:
+if util.isposix:
     # With glibc 2.7+ the 'e' flag uses O_CLOEXEC when opening.
     # The 'e' flag will be ignored on older versions of glibc.
     PACKOPENMODE = "rbe"

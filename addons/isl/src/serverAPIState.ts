@@ -16,8 +16,13 @@ import type {
   SubscriptionKind,
   SubscriptionResultsData,
   UncommittedChanges,
+  ValidatedRepoInfo,
 } from './types';
 
+import {DEFAULT_DAYS_OF_COMMITS_TO_LOAD} from 'isl-server/src/constants';
+import {atom} from 'jotai';
+import {reuseEqualObjects} from 'shared/deepEqualExt';
+import {randomId} from 'shared/utils';
 import {hiddenRemoteBookmarksAtom} from './BookmarksData';
 import serverAPI from './ClientToServerAPI';
 import {latestSuccessorsMapAtom, successionTracker} from './SuccessionTracker';
@@ -27,10 +32,6 @@ import {atomFamilyWeak, configBackedAtom, readAtom, writeAtom} from './jotaiUtil
 import platform from './platform';
 import {atomResetOnCwdChange, repositoryData} from './repositoryData';
 import {registerCleanup, registerDisposable} from './utils';
-import {DEFAULT_DAYS_OF_COMMITS_TO_LOAD} from 'isl-server/src/constants';
-import {atom} from 'jotai';
-import {reuseEqualObjects} from 'shared/deepEqualExt';
-import {randomId} from 'shared/utils';
 
 export {repositoryData};
 
@@ -51,7 +52,7 @@ registerCleanup(
   import.meta.hot,
 );
 
-export const repositoryInfo = atom(
+export const repositoryInfoOrError = atom(
   get => {
     const data = get(repositoryData);
     return data?.info;
@@ -68,6 +69,37 @@ export const repositoryInfo = atom(
     }));
   },
 );
+
+/** ValidatedRepoInfo, or undefined on error. */
+export const repositoryInfo = atom(
+  get => {
+    const info = get(repositoryInfoOrError);
+    if (info?.type === 'success') {
+      return info;
+    }
+    return undefined;
+  },
+  (
+    get,
+    set,
+    update:
+      | ValidatedRepoInfo
+      | undefined
+      | ((_prev: ValidatedRepoInfo | undefined) => ValidatedRepoInfo | undefined),
+  ) => {
+    const value = typeof update === 'function' ? update(get(repositoryInfo)) : update;
+    set(repositoryData, last => ({
+      ...last,
+      info: value,
+    }));
+  },
+);
+
+/** Main command name, like 'sl'. */
+export const mainCommandName = atom(get => {
+  const info = get(repositoryInfo);
+  return info?.command ?? 'sl';
+});
 
 export const applicationinfo = atom<ApplicationInfo | undefined>(undefined);
 registerDisposable(

@@ -14,9 +14,10 @@ from __future__ import absolute_import, print_function
 
 import contextlib
 import errno
+import io
 import time
 
-from . import blackbox, error, extensions, pycompat, util
+from . import blackbox, error, extensions, util
 from .i18n import _
 
 
@@ -216,7 +217,7 @@ class profile:
                 self._ui.warn(_("unrecognized profiler '%s' - ignored\n") % profiler)
                 profiler = "stat"
 
-        self._fp = pycompat.stringutf8io()
+        self._fp = io.StringIO()
 
         if proffn is not None:
             pass
@@ -256,12 +257,12 @@ class profile:
                     path = self._ui.expandpath(output)
                     try:
                         with open(path, "wb") as f:
-                            f.write(pycompat.encodeutf8(content))
+                            f.write(content.encode())
                     except IOError as e:
                         # CreateFile(.., CREATE_ALWAYS, ...) can fail
                         # for existing "hidden" or "system" files.
                         # See D8099420.
-                        if pycompat.iswindows and e.errno == errno.EACCES:
+                        if util.iswindows and e.errno == errno.EACCES:
                             with open(path, "r+b") as f:
                                 f.write(content)
                 else:

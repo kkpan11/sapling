@@ -12,6 +12,8 @@ use gotham_derive::StateData;
 
 const WAIT_FOR_WBC_UPDATE: &str = "x-git-read-after-write-consistency";
 const METAGIT_BYPASS_ALL_HOOKS: &str = "x-metagit-bypass-hooks";
+const USE_ONLY_OFFSET_DELTA: &str = "x-git-only-offset-delta";
+const PUSH_CONCURRENCY: &str = "x-git-push-concurrency";
 
 #[derive(Clone, StateData)]
 pub struct Pushvars(HashMap<String, Bytes>);
@@ -36,6 +38,20 @@ impl Pushvars {
         self.0
             .get(WAIT_FOR_WBC_UPDATE)
             .map_or(false, |v| **v == *b"1")
+    }
+
+    pub fn use_only_offset_delta(&self) -> bool {
+        self.0
+            .get(USE_ONLY_OFFSET_DELTA)
+            .map_or(false, |v| **v == *b"1")
+    }
+
+    pub fn concurrency(&self) -> usize {
+        self.0
+            .get(PUSH_CONCURRENCY)
+            .and_then(|v| String::from_utf8_lossy(v).parse().ok())
+            .unwrap_or(100)
+            .clamp(10, 500)
     }
 }
 

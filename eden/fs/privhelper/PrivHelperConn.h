@@ -51,6 +51,8 @@ class PrivHelperConn {
     REQ_MOUNT_NFS = 11,
     REQ_UNMOUNT_NFS = 12,
     REQ_GET_PID = 13,
+    REQ_START_FAM = 14,
+    REQ_STOP_FAM = 15,
   };
 
   // This structure should never change. If fields need to be added to the
@@ -113,10 +115,12 @@ class PrivHelperConn {
 
   static UnixSocket::Message serializeUnmountRequest(
       uint32_t xid,
-      folly::StringPiece mountPoint);
+      folly::StringPiece mountPoint,
+      UnmountOptions& options);
   static void parseUnmountRequest(
       folly::io::Cursor& cursor,
-      std::string& mountPoint);
+      std::string& mountPoint,
+      UnmountOptions& options);
 
   static UnixSocket::Message serializeNfsUnmountRequest(
       uint32_t xid,
@@ -179,6 +183,35 @@ class PrivHelperConn {
   static UnixSocket::Message serializeGetPidRequest(uint32_t xid);
   static pid_t parseGetPidResponse(const UnixSocket::Message& msg);
 
+  static UnixSocket::Message serializeStartFamRequest(
+      uint32_t xid,
+      const std::vector<std::string>& paths,
+      const std::string& tmpOutputPath,
+      const std::string& specifiedOutputPath,
+      const bool shouldUpload);
+
+  static void parseStartFamRequest(
+      folly::io::Cursor& cursor,
+      std::vector<std::string>& paths,
+      std::string& tmpOutputPath,
+      std::string& specifiedOutputPath,
+      bool& shouldUpload);
+
+  static pid_t parseStartFamResponse(const UnixSocket::Message& msg);
+  static void parseStopFamResponse(
+      const UnixSocket::Message& msg,
+      std::string& tmpOutputPath,
+      std::string& specifiedOutputPath,
+      bool& shouldUpload);
+
+  static UnixSocket::Message serializeStopFamRequest(uint32_t xid);
+
+  static void serializeStopFamResponse(
+      folly::io::Appender& appender,
+      const std::string& tmpOutputPath,
+      const std::string& specifiedOutputPath,
+      const bool shouldUpload);
+
   /**
    * Parse a response that is expected to be empty.
    *
@@ -215,6 +248,13 @@ class PrivHelperError : public std::exception {
 
  private:
   std::string message_;
+};
+
+/* These match the options of umount(2) */
+enum UnmountOptionBits : uint32_t {
+  FORCE = 1 << 0,
+  DETACH = 1 << 1,
+  EXPIRE = 1 << 2,
 };
 
 } // namespace facebook::eden
@@ -270,6 +310,12 @@ struct formatter<facebook::eden::PrivHelperConn::MsgType>
         break;
       case facebook::eden::PrivHelperConn::REQ_GET_PID:
         name = "REQ_GET_PID";
+        break;
+      case facebook::eden::PrivHelperConn::REQ_START_FAM:
+        name = "REQ_START_FAM";
+        break;
+      case facebook::eden::PrivHelperConn::REQ_STOP_FAM:
+        name = "REQ_STOP_FAM";
         break;
       default:
         name = "Unknown PrivHelperConn::MsgType";

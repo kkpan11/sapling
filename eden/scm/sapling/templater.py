@@ -29,7 +29,6 @@ from . import (
     node,
     parser,
     patch,
-    pycompat,
     registrar,
     revset as revsetmod,
     revsetlang,
@@ -40,7 +39,6 @@ from . import (
     util,
 )
 from .i18n import _
-
 
 # template parsing
 
@@ -69,7 +67,7 @@ def tokenize(program, start, end, term=None):
     """Parse a template expression into a stream of tokens, which must end
     with term if specified"""
     pos = start
-    program = pycompat.bytestr(program)
+    program = str(program)
     while pos < end:
         c = program[pos]
         if c.isspace():  # skip inter-token whitespace
@@ -726,7 +724,7 @@ def diff(context, mapping, args):
     ctx = mapping["ctx"]
     chunks = ctx.diff(match=ctx.match([], getpatterns(0), getpatterns(1)))
 
-    return pycompat.decodeutf8(b"".join(chunks), errors="surrogateescape")
+    return b"".join(chunks).decode(errors="surrogateescape")
 
 
 @templatefunc("enabled(extname)", argspec="extname")
@@ -999,7 +997,7 @@ def join(context, mapping, args):
     # abuses generator as a keyword that returns a list of dicts.
     joinset = evalrawexp(context, mapping, args[0])
     joinset = templatekw.unwrapvalue(joinset)
-    joinfmt = getattr(joinset, "joinfmt", pycompat.identity)
+    joinfmt = getattr(joinset, "joinfmt", util.identity)
     joiner = " "
     if len(args) > 1:
         joiner = evalstring(context, mapping, args[1])
@@ -1626,13 +1624,13 @@ def _flatten(thing):
     """yield a single stream from a possibly nested set of iterators"""
     thing = templatekw.unwraphybrid(thing)
     if isinstance(thing, str):
-        yield pycompat.encodeutf8(thing, errors="surrogateescape")
+        yield thing.encode(errors="surrogateescape")
     elif isinstance(thing, bytes):
         yield thing
     elif thing is None:
         pass
     elif not hasattr(thing, "__iter__"):
-        yield pycompat.encodeutf8(str(thing))
+        yield str(thing).encode()
     else:
         for i in thing:
             for j in _flatten(i):
@@ -1836,7 +1834,7 @@ class templater:
         """Get the template for the given template name. Use a local cache."""
         if t not in self.cache:
             try:
-                self.cache[t] = pycompat.decodeutf8(util.readfile(self.map[t][1]))
+                self.cache[t] = util.readfile(self.map[t][1]).decode()
             except KeyError as inst:
                 raise TemplateNotFound(_('"%s" not in template map') % inst.args[0])
             except IOError as inst:

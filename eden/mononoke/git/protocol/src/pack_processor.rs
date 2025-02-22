@@ -18,6 +18,7 @@ use bytes::Bytes;
 use cloned::cloned;
 use context::CoreContext;
 use data::entry::Header::RefDelta;
+use futures::future;
 use futures::stream;
 use futures::StreamExt;
 use futures::TryStreamExt;
@@ -39,6 +40,8 @@ use gix_pack::data::input::Error as InputError;
 use gix_pack::data::File;
 use mononoke_types::hash::GitSha1;
 use packfile::types::BaseObject;
+use rayon::iter::IntoParallelIterator;
+use rayon::iter::ParallelIterator;
 use repo_blobstore::RepoBlobstore;
 use rustc_hash::FxHashMap;
 use scuba_ext::FutureStatsScubaExt;
@@ -148,6 +151,7 @@ async fn fetch_prereq_objects(
     pack_file: &data::File,
     ctx: &CoreContext,
     blobstore: Arc<RepoBlobstore>,
+    concurrency: usize,
 ) -> Result<ObjectMap> {
     // Iterate over all packfile entries and fetch all the required base items
     let mut base_items = HashSet::new();
@@ -161,8 +165,7 @@ async fn fetch_prereq_objects(
         }
     }
     stream::iter(base_items)
-        .map(Ok)
-        .try_filter_map(|object_id| {
+        .map(|object_id| {
             cloned!(ctx, blobstore);
             async move {
                 let git_identifier =
@@ -182,6 +185,8 @@ async fn fetch_prereq_objects(
                 }
             }
         })
+        .buffer_unordered(concurrency)
+        .try_filter_map(|maybe_object| future::ready(Ok(maybe_object)))
         .try_collect::<HashMap<_, _>>()
         .await
 }
@@ -192,6 +197,7 @@ pub async fn parse_pack(
     pack_bytes: &[u8],
     ctx: &CoreContext,
     blobstore: Arc<RepoBlobstore>,
+    concurrency: usize,
 ) -> Result<FxHashMap<ObjectId, ObjectContent>> {
     // If the packfile is empty, return an empty object map. This can happen when the push only has ref create/update
     // pointing to existing commit or just ref deletes
@@ -204,7 +210,7 @@ pub async fn parse_pack(
         .tempfile()?;
     raw_file.write_all(pack_bytes)?;
     raw_file.flush()?;
-    let response = parse_stored_pack(raw_file.path(), ctx, blobstore).await;
+    let response = parse_stored_pack(raw_file.path(), ctx, blobstore, concurrency).await;
     raw_file.close().unwrap_or_default();
     response
 }
@@ -212,7 +218,7 @@ pub async fn parse_pack(
 fn process_pack_entries(pack_file: &data::File, entries: PackEntries) -> Result<PackEntries> {
     let (pending_entries, prereq_objects) = entries.into_pending_and_processed();
     let output_entries = pending_entries
-        .into_iter()
+        .into_par_iter()
         .map(|entry| {
             let mut output = vec![];
             let err_context = format!("Error in decoding packfile entry: {:?}", &entry.header);
@@ -257,6 +263,7 @@ async fn parse_stored_pack(
     pack_path: &Path,
     ctx: &CoreContext,
     blobstore: Arc<RepoBlobstore>,
+    concurrency: usize,
 ) -> Result<FxHashMap<ObjectId, ObjectContent>> {
     let pack_file = Arc::new(File::at(pack_path, Kind::Sha1).with_context(|| {
         format!(
@@ -275,13 +282,21 @@ async fn parse_stored_pack(
     })
     .try_timed()
     .await?
-    .log_future_stats(ctx.scuba().clone(), "Verified Packfile Checksum", None)?;
+    .log_future_stats(
+        ctx.scuba().clone(),
+        "Verified Packfile Checksum",
+        "Push".to_string(),
+    )?;
 
     // Load all the prerequisite objects
-    let prereq_objects = fetch_prereq_objects(&pack_file, ctx, blobstore.clone())
+    let prereq_objects = fetch_prereq_objects(&pack_file, ctx, blobstore.clone(), concurrency)
         .try_timed()
         .await?
-        .log_future_stats(ctx.scuba().clone(), "Fetched Prerequisite Objects", None);
+        .log_future_stats(
+            ctx.scuba().clone(),
+            "Fetched Prerequisite Objects",
+            "Push".to_string(),
+        );
     // Fetch all the entries that need to be processed
     let pending_entries = pack_file
         .streaming_iter()
@@ -309,5 +324,9 @@ async fn parse_stored_pack(
     })
     .try_timed()
     .await?
-    .log_future_stats(ctx.scuba().clone(), "Decoded objects from Packfile", None)
+    .log_future_stats(
+        ctx.scuba().clone(),
+        "Decoded objects from Packfile",
+        "Push".to_string(),
+    )
 }

@@ -5,7 +5,6 @@
  * GNU General Public License version 2.
  */
 
-use std::num::NonZeroU64;
 use std::sync::Arc;
 
 use anyhow::bail;
@@ -29,12 +28,10 @@ use cmdlib::args;
 use cmdlib::args::MononokeMatches;
 use cmdlib::helpers;
 use cmdlib_x_repo::create_commit_syncer_from_matches;
-use cmdlib_x_repo::repo_provider_from_matches;
 use commit_graph::CommitGraph;
 use commit_graph::CommitGraphWriter;
 use context::CoreContext;
 use cross_repo_sync::find_toposorted_unsynced_ancestors;
-use cross_repo_sync::get_all_submodule_deps_from_repo_pair;
 use cross_repo_sync::verify_working_copy_with_version;
 use cross_repo_sync::CandidateSelectionHint;
 use cross_repo_sync::CommitSyncContext;
@@ -64,11 +61,8 @@ use megarepolib::chunking::Chunker;
 use megarepolib::commit_sync_config_utils::diff_small_repo_commit_sync_configs;
 use megarepolib::common::create_and_save_bonsai;
 use megarepolib::common::delete_files_in_chunks;
-use megarepolib::common::StackPosition;
 use megarepolib::history_fixup_delete::create_history_fixup_deletes;
 use megarepolib::history_fixup_delete::HistoryFixupDeletes;
-use megarepolib::perform_move;
-use megarepolib::perform_stack_move;
 use megarepolib::pre_merge_delete::create_pre_merge_delete;
 use megarepolib::pre_merge_delete::PreMergeDelete;
 use megarepolib::working_copy::get_working_copy_paths_by_prefixes;
@@ -80,7 +74,6 @@ use mononoke_types::ChangesetId;
 use mononoke_types::FileChange;
 use mononoke_types::NonRootMPath;
 use mononoke_types::RepositoryId;
-use movers::get_small_to_large_mover;
 use movers::Mover;
 use mutable_counters::MutableCounters;
 use phases::Phases;
@@ -135,7 +128,6 @@ use crate::cli::DELETION_CHUNK_SIZE;
 use crate::cli::DIFF_MAPPING_VERSIONS;
 use crate::cli::DRY_RUN;
 use crate::cli::EVEN_CHUNK_SIZE;
-use crate::cli::FIRST_PARENT;
 use crate::cli::GRADUAL_DELETE;
 use crate::cli::GRADUAL_MERGE;
 use crate::cli::GRADUAL_MERGE_PROGRESS;
@@ -147,10 +139,6 @@ use crate::cli::LIMIT;
 use crate::cli::MANUAL_COMMIT_SYNC;
 use crate::cli::MAPPING_VERSION_NAME;
 use crate::cli::MARK_NOT_SYNCED_COMMAND;
-use crate::cli::MAX_NUM_OF_MOVES_IN_COMMIT;
-use crate::cli::MERGE;
-use crate::cli::MOVE;
-use crate::cli::ORIGIN_REPO;
 use crate::cli::OVERWRITE;
 use crate::cli::PARENTS;
 use crate::cli::PATH;
@@ -159,24 +147,18 @@ use crate::cli::PATH_PREFIX;
 use crate::cli::PATH_REGEX;
 use crate::cli::PRE_DELETION_COMMIT;
 use crate::cli::PRE_MERGE_DELETE;
-use crate::cli::RUN_MOVER;
-use crate::cli::SECOND_PARENT;
 use crate::cli::SELECT_PARENTS_AUTOMATICALLY;
 use crate::cli::SOURCE_CHANGESET;
 use crate::cli::SYNC_COMMIT_AND_ANCESTORS;
-use crate::cli::SYNC_DIAMOND_MERGE;
 use crate::cli::TARGET_CHANGESET;
 use crate::cli::TO_MERGE_CS_ID;
 use crate::cli::VERSION;
 use crate::cli::WAIT_SECS;
-use crate::merging::perform_merge;
 
 mod catchup;
 mod cli;
 mod gradual_merge;
 mod manual_commit_sync;
-mod merging;
-mod sync_diamond_merge;
 
 #[derive(Clone)]
 #[facet::container]
@@ -201,170 +183,6 @@ pub struct Repo(
     dyn Filenodes,
     SqlQueryConfig,
 );
-
-async fn run_move<'a>(
-    ctx: &CoreContext,
-    matches: &MononokeMatches<'a>,
-    sub_m: &ArgMatches<'a>,
-) -> Result<(), Error> {
-    let origin_repo =
-        RepositoryId::new(args::get_i32_opt(sub_m, ORIGIN_REPO).expect("Origin repo is missing"));
-    let resulting_changeset_args = cs_args_from_matches(sub_m)?;
-    let move_parent = sub_m.value_of(CHANGESET).unwrap().to_owned();
-
-    let mapping_version_name = sub_m
-        .value_of(MAPPING_VERSION_NAME)
-        .ok_or_else(|| format_err!("mapping-version-name is not specified"))?;
-    let mapping_version = CommitSyncConfigVersion(mapping_version_name.to_string());
-
-    let live_commit_sync_config =
-        get_live_commit_sync_config(ctx, ctx.fb, matches, matches.config_store(), origin_repo)
-            .await
-            .context("building live_commit_sync_config")?;
-
-    let commit_sync_config = live_commit_sync_config
-        .get_commit_sync_config_by_version(origin_repo, &mapping_version)
-        .await?;
-    let mover = get_small_to_large_mover(&commit_sync_config, origin_repo).unwrap();
-
-    let max_num_of_moves_in_commit: Option<NonZeroU64> =
-        args::get_and_parse_opt(sub_m, MAX_NUM_OF_MOVES_IN_COMMIT);
-
-    let repo = args::not_shardmanager_compatible::open_repo::<Repo>(
-        ctx.fb,
-        &ctx.logger().clone(),
-        matches,
-    )
-    .await?;
-
-    let parent_bcs_id = helpers::csid_resolve(ctx, &repo, move_parent).await?;
-
-    if let Some(max_num_of_moves_in_commit) = max_num_of_moves_in_commit {
-        let changesets = perform_stack_move(
-            ctx,
-            &repo,
-            parent_bcs_id,
-            mover.as_ref(),
-            max_num_of_moves_in_commit,
-            |num: StackPosition| {
-                let mut args = resulting_changeset_args.clone();
-                let message = args.message + &format!(" #{}", num.0);
-                args.message = message;
-                args
-            },
-        )
-        .await?;
-        info!(
-            ctx.logger(),
-            "created {} commits, with the last commit {:?}",
-            changesets.len(),
-            changesets.last()
-        );
-    } else {
-        perform_move(
-            ctx,
-            &repo,
-            parent_bcs_id,
-            mover.as_ref(),
-            resulting_changeset_args,
-        )
-        .await?;
-    }
-    Ok(())
-}
-
-async fn run_merge<'a>(
-    ctx: &CoreContext,
-    matches: &MononokeMatches<'a>,
-    sub_m: &ArgMatches<'a>,
-) -> Result<(), Error> {
-    let first_parent = sub_m.value_of(FIRST_PARENT).unwrap().to_owned();
-    let second_parent = sub_m.value_of(SECOND_PARENT).unwrap().to_owned();
-    let resulting_changeset_args = cs_args_from_matches(sub_m)?;
-    let repo = args::not_shardmanager_compatible::open_repo::<Repo>(
-        ctx.fb,
-        &ctx.logger().clone(),
-        matches,
-    )
-    .await?;
-
-    let first_parent_fut = helpers::csid_resolve(ctx, &repo, first_parent);
-    let second_parent_fut = helpers::csid_resolve(ctx, &repo, second_parent);
-    let (first_parent, second_parent) = try_join(first_parent_fut, second_parent_fut).await?;
-
-    info!(ctx.logger(), "Creating a merge commit");
-    perform_merge(
-        ctx.clone(),
-        repo.clone(),
-        first_parent,
-        second_parent,
-        resulting_changeset_args,
-    )
-    .await
-    .map(|_| ())
-}
-
-async fn run_sync_diamond_merge<'a>(
-    ctx: &CoreContext,
-    matches: &MononokeMatches<'a>,
-    sub_m: &ArgMatches<'a>,
-) -> Result<(), Error> {
-    let config_store = matches.config_store();
-    let source_repo_id =
-        args::not_shardmanager_compatible::get_source_repo_id(config_store, matches)?;
-    let target_repo_id =
-        args::not_shardmanager_compatible::get_target_repo_id(config_store, matches)?;
-    let maybe_bookmark = sub_m
-        .value_of(cli::COMMIT_BOOKMARK)
-        .map(BookmarkKey::new)
-        .transpose()?;
-
-    let bookmark = maybe_bookmark.ok_or_else(|| Error::msg("bookmark must be specified"))?;
-
-    let source_repo = args::open_repo_with_repo_id(ctx.fb, ctx.logger(), source_repo_id, matches);
-    let target_repo = args::open_repo_with_repo_id(ctx.fb, ctx.logger(), target_repo_id, matches);
-
-    let merge_commit_hash = sub_m.value_of(COMMIT_HASH).unwrap().to_owned();
-    let (source_repo, target_repo): (Repo, Repo) = try_join(source_repo, target_repo).await?;
-
-    let source_merge_cs_id = helpers::csid_resolve(ctx, &source_repo, merge_commit_hash).await?;
-
-    let live_commit_sync_config = get_live_commit_sync_config(
-        ctx,
-        ctx.fb,
-        matches,
-        config_store,
-        source_repo.repo_identity().id(),
-    )
-    .await
-    .context("building live_commit_sync_config")?;
-
-    let live_commit_sync_config = Arc::new(live_commit_sync_config);
-
-    let repo_provider = repo_provider_from_matches(ctx, matches);
-
-    let source_repo_arc = Arc::new(source_repo);
-    let target_repo_arc = Arc::new(target_repo);
-    let submodule_deps = get_all_submodule_deps_from_repo_pair(
-        ctx,
-        source_repo_arc.clone(),
-        target_repo_arc.clone(),
-        repo_provider,
-    )
-    .await?;
-
-    sync_diamond_merge::do_sync_diamond_merge(
-        ctx,
-        source_repo_arc.as_ref(),
-        target_repo_arc.as_ref(),
-        submodule_deps,
-        source_merge_cs_id,
-        bookmark,
-        live_commit_sync_config,
-    )
-    .await
-    .map(|_| ())
-}
 
 async fn run_pre_merge_delete<'a>(
     ctx: &CoreContext,
@@ -858,22 +676,6 @@ async fn run_catchup_delete_head<'a>(
     Ok(())
 }
 
-async fn run_mover<'a>(
-    ctx: &CoreContext,
-    matches: &MononokeMatches<'a>,
-    sub_m: &ArgMatches<'a>,
-) -> Result<(), Error> {
-    let commit_syncer = create_commit_syncer_from_matches::<CrossRepo>(ctx, matches, None).await?;
-    let version = get_version(sub_m)?;
-    let movers = commit_syncer.get_movers_by_version(&version).await?;
-    let path = sub_m
-        .value_of(PATH)
-        .ok_or_else(|| format_err!("{} not set", PATH))?;
-    let path = NonRootMPath::new(path)?;
-    println!("{:?}", movers.mover.move_path(&path));
-    Ok(())
-}
-
 async fn run_catchup_validate<'a>(
     ctx: &CoreContext,
     matches: &MononokeMatches<'a>,
@@ -1272,6 +1074,7 @@ async fn run_sync_commit_and_ancestors<'a>(
                 CandidateSelectionHint::Only,
                 CommitSyncContext::AdminChangeMapping,
                 None,
+                false, // add_mapping_to_hg_extra
             )
             .await?;
     }
@@ -1283,15 +1086,6 @@ async fn run_sync_commit_and_ancestors<'a>(
     info!(ctx.logger(), "remapped to {:?}", commit_sync_outcome);
 
     Ok(())
-}
-
-fn get_version(matches: &ArgMatches<'_>) -> Result<CommitSyncConfigVersion> {
-    Ok(CommitSyncConfigVersion(
-        matches
-            .value_of(VERSION)
-            .ok_or_else(|| format_err!("{} not set", VERSION))?
-            .to_string(),
-    ))
 }
 
 async fn run_delete_no_longer_bound_files_from_large_repo<'a>(
@@ -1438,13 +1232,9 @@ fn main(fb: FacebookInit) -> Result<()> {
             (MARK_NOT_SYNCED_COMMAND, Some(sub_m)) => {
                 run_mark_not_synced(ctx, &matches, sub_m).await
             }
-            (MERGE, Some(sub_m)) => run_merge(ctx, &matches, sub_m).await,
-            (MOVE, Some(sub_m)) => run_move(ctx, &matches, sub_m).await,
-            (RUN_MOVER, Some(sub_m)) => run_mover(ctx, &matches, sub_m).await,
             (SYNC_COMMIT_AND_ANCESTORS, Some(sub_m)) => {
                 run_sync_commit_and_ancestors(ctx, &matches, sub_m).await
             }
-            (SYNC_DIAMOND_MERGE, Some(sub_m)) => run_sync_diamond_merge(ctx, &matches, sub_m).await,
 
             // All commands relevant to gradual merge
             (CATCHUP_DELETE_HEAD, Some(sub_m)) => {

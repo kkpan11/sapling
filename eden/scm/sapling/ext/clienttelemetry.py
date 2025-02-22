@@ -18,8 +18,6 @@ from typing import Any, Dict
 
 from sapling import blackbox, dispatch, extensions, hg, perftrace, util, wireproto
 from sapling.i18n import _
-from sapling.pycompat import decodeutf8
-
 
 # Client telemetry functions generate client telemetry data at connection time.
 _clienttelemetryfuncs = {}
@@ -115,7 +113,7 @@ def _peersetup(ui, peer) -> None:
         logargs = clienttelemetryvaluesfromconfig(ui)
         logargs.update({name: f(ui) for name, f in _clienttelemetryfuncs.items()})
         logargs.update(_clienttelemetrydata)
-        response = decodeutf8(peer._call("clienttelemetry", **logargs))
+        response = peer._call("clienttelemetry", **logargs).decode()
         responseitems = response.split()
         peername = responseitems[0] if responseitems else ""
         peer._realhostname = peername
@@ -125,7 +123,7 @@ def _peersetup(ui, peer) -> None:
         peer._peerinfo = peerinfo
         blackbox.log({"clienttelemetry": {"peername": peername, "peerinfo": peerinfo}})
         util.info("client-telemetry", peername=peername, **peerinfo)
-        ann = ui.configbool("clienttelemetry", "announceremotehostname", None)
+        ann = ui.configbool("clienttelemetry", "announceremotehostname", False)
         if ann is None:
             ann = not ui.plain() and ui._isatty(ui.ferr)
         if ann and not ui.quiet:

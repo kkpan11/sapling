@@ -69,7 +69,6 @@ use mononoke_app::monitoring::AliveService;
 use mononoke_app::monitoring::MonitoringAppExtension;
 use mononoke_app::MononokeApp;
 use mononoke_app::MononokeAppBuilder;
-use mononoke_hg_sync_job_helper_lib::wait_for_latest_log_id_to_be_synced;
 use mononoke_types::BonsaiChangeset;
 use mononoke_types::BonsaiChangesetMut;
 use mononoke_types::ChangesetId;
@@ -131,7 +130,6 @@ struct GraphqlInputVariables {
 struct CheckerFlags {
     phab_check_disabled: bool,
     x_repo_check_disabled: bool,
-    hg_sync_check_disabled: bool,
 }
 #[derive(Clone, Debug)]
 struct ChangesetArgs {
@@ -181,7 +179,6 @@ pub struct RecoveryFields {
     move_bookmark_commits_done: usize,
     phab_check_disabled: bool,
     x_repo_check_disabled: bool,
-    hg_sync_check_disabled: bool,
     sleep_time: Duration,
     dest_bookmark_name: String,
     commit_author: String,
@@ -197,6 +194,9 @@ pub struct RecoveryFields {
     /// ChangesetIds of the gitimported commits
     gitimport_bcs_ids: Option<Vec<ChangesetId>>,
     git_merge_bcs_id: Option<ChangesetId>,
+    /// Print the mapping of git commit id -> bonsai changeset id after importing
+    /// all git commits.
+    print_gitimport_map: bool,
 }
 
 async fn rewrite_file_paths(
@@ -310,6 +310,7 @@ async fn back_sync_commits_to_small_repo(
                     CandidateSelectionHint::Only,
                     CommitSyncContext::RepoImport,
                     Some(version.clone()),
+                    false, // add_mapping_to_hg_extra
                 )
                 .await?;
 
@@ -475,15 +476,8 @@ async fn move_bookmark(
 
         let check_repo = async move {
             let hg_csid = repo.derive_hg_changeset(ctx, curr_csid.clone()).await?;
-            check_dependent_systems(
-                ctx,
-                repo,
-                checker_flags,
-                hg_csid,
-                sleep_time,
-                maybe_call_sign,
-            )
-            .await?;
+            check_dependent_systems(ctx, checker_flags, hg_csid, sleep_time, maybe_call_sign)
+                .await?;
             Result::<_, Error>::Ok(())
         };
 
@@ -525,7 +519,6 @@ async fn move_bookmark(
 
             check_dependent_systems(
                 ctx,
-                &small_repo_back_sync_vars.small_repo,
                 checker_flags,
                 small_repo_hg_csid,
                 sleep_time,
@@ -674,7 +667,6 @@ async fn get_leaf_entries(
 
 async fn check_dependent_systems(
     ctx: &CoreContext,
-    repo: &Repo,
     checker_flags: &CheckerFlags,
     hg_csid: HgChangesetId,
     sleep_time: Duration,
@@ -683,7 +675,6 @@ async fn check_dependent_systems(
     // if a check is disabled, we have already passed the check
     let mut passed_phab_check = checker_flags.phab_check_disabled;
     let mut _passed_x_repo_check = checker_flags.x_repo_check_disabled;
-    let passed_hg_sync_check = checker_flags.hg_sync_check_disabled;
 
     while !passed_phab_check {
         let call_sign = maybe_call_sign.as_ref().unwrap();
@@ -695,10 +686,6 @@ async fn check_dependent_systems(
             );
             time::sleep(sleep_time).await;
         }
-    }
-
-    if !passed_hg_sync_check {
-        wait_for_latest_log_id_to_be_synced(ctx, repo, sleep_time).await?;
     }
 
     Ok(())
@@ -988,6 +975,21 @@ impl Mover for CombinedMover {
         }
         Ok(Some(path))
     }
+
+    fn conflicts_with(&self, path: &NonRootMPath) -> Result<bool, Error> {
+        let mut path = path.clone();
+        for mover in &self.movers {
+            if mover.conflicts_with(&path)? {
+                return Ok(true);
+            }
+            let maybe_path = mover.move_path(&path)?;
+            path = match maybe_path {
+                Some(moved_path) => moved_path,
+                None => return Ok(false),
+            };
+        }
+        Ok(false)
+    }
 }
 
 async fn repo_import(
@@ -1036,7 +1038,6 @@ async fn repo_import(
     let checker_flags = CheckerFlags {
         phab_check_disabled: recovery_fields.phab_check_disabled,
         x_repo_check_disabled: recovery_fields.x_repo_check_disabled,
-        hg_sync_check_disabled: recovery_fields.hg_sync_check_disabled,
     };
 
     let live_commit_sync_config =
@@ -1153,6 +1154,13 @@ async fn repo_import(
         let import_map =
             import_tools::gitimport(&ctx, path, Arc::new(uploader), &target, &prefs).await?;
         info!(ctx.logger(), "Added commits to Mononoke");
+
+        if recovery_fields.print_gitimport_map {
+            info!(
+                ctx.logger(),
+                "Gitimport Map (git commit id -> bonsai changeset id):\n{import_map:#?}"
+            );
+        }
 
         let git_merge_oid = {
             let mut child = process::Command::new(&prefs.git_command_path)
@@ -1490,7 +1498,7 @@ async fn check_megarepo_large_repo_import_requirements(
     live_commit_sync_config: &dyn LiveCommitSyncConfig,
     dest_bookmark: &BookmarkKey,
     dest_path_prefix: &NonRootMPath,
-    mark_not_synced_mapping: Option<&str>,
+    mb_mark_not_synced_mapping: Option<&str>,
 ) -> Result<(), Error> {
     let dest_cs_id = repo
         .bookmarks()
@@ -1544,16 +1552,35 @@ async fn check_megarepo_large_repo_import_requirements(
             }
         }
 
-        if mark_not_synced_mapping.is_none() {
-            // If we are importing into a large repo, we need to mark all the imported as
-            // "not-synced", which means we need the name of a mapping that contains only
-            // the large repo.
-            return Err(anyhow!(concat!(
+        // If we are importing into a large repo, we need to mark all the imported as
+        // "not-synced", which means we need the name of a mapping that contains only
+        // the large repo.
+        let mark_not_synced_mapping = mb_mark_not_synced_mapping.ok_or_else(|| {
+            anyhow!(concat!(
                 "You are importing into a large repo without a large-only mapping.  ",
                 "Please specify one with '--mark-not-synced-mapping'.",
-            )));
+            ))
+        })?;
+
+        // We also need to check if the provided mapping actually exists
+        let mark_not_synced_mapping = CommitSyncConfigVersion(mark_not_synced_mapping.to_string());
+        let mark_not_synced_mapping_config = live_commit_sync_config
+            .get_commit_sync_config_by_version_if_exists(
+                repo.repo_identity().id(),
+                &mark_not_synced_mapping,
+            )
+            .await?
+            .ok_or_else(|| {
+                anyhow!("Couldn't find commit sync config version {mark_not_synced_mapping}",)
+            })?;
+
+        // And that it's indeed a large-only mapping
+        if !mark_not_synced_mapping_config.small_repos.is_empty() {
+            return Err(anyhow!(
+                "The provided mapping {mark_not_synced_mapping} is not a large-only mapping"
+            ));
         }
-    } else if mark_not_synced_mapping.is_some() {
+    } else if mb_mark_not_synced_mapping.is_some() {
         return Err(anyhow!(concat!(
             "You specified '--mark-not-synced-mapping' but are not importing into a ",
             "large repo.  This is invalid.",
@@ -1631,6 +1658,12 @@ pub(crate) struct InvalidReverseMover;
 
 impl Mover for InvalidReverseMover {
     fn move_path(&self, _source_path: &NonRootMPath) -> Result<Option<NonRootMPath>, Error> {
+        Err(anyhow!(
+            "Reverse mover should never be called for repo_import tool"
+        ))
+    }
+
+    fn conflicts_with(&self, _path: &NonRootMPath) -> Result<bool, Error> {
         Err(anyhow!(
             "Reverse mover should never be called for repo_import tool"
         ))

@@ -135,11 +135,21 @@
   > --dest-bookmark master_bookmark \
   > --commit-author user \
   > --commit-message "merging" \
+  > --print-gitimport-map \
   > --recovery-file-path "$GIT_REPO/recovery_file.json"
   using repo "repo" repoid RepositoryId(0)
   Started importing git commits to Mononoke
   GitRepo:$TESTTMP/repo-git commit 2 of 2 - Oid:67328fd4 => Bid:6f63fa96* (glob)
   Added commits to Mononoke
+  Gitimport Map (git commit id -> bonsai changeset id):
+  {
+      Sha1(ce435b03d4ef526648f8654c61e26ae5cc1069cc): ChangesetId(
+          Blake2(071d73e6b97823ffbde324c6147a785013f479157ade3f83c9b016c8f40c09de),
+      ),
+      Sha1(67328fd43cc090474ba047aa5dccc86e2a08dff0): ChangesetId(
+          Blake2(6f63fa96348a0854cd77a4b70f5b9b776e963735f92e283b67123161f1bc7bcd),
+      ),
+  }
   Commit 1/2: Remapped ChangesetId(Blake2(071d73e6b97823ffbde324c6147a785013f479157ade3f83c9b016c8f40c09de)) => ChangesetId(Blake2(4f830791a5ae7a2981d6c252d2be0bd7ebd3b1090080074b4b4bae6deb250b4a))
   Commit 2/2: Remapped ChangesetId(Blake2(6f63fa96348a0854cd77a4b70f5b9b776e963735f92e283b67123161f1bc7bcd)) => ChangesetId(Blake2(a1740c3d4a0f8e012b12c0c93f5a69cc902fe7398d8f334ef202f33c32fc247c))
   Saving shifted bonsai changesets
@@ -153,7 +163,7 @@
   Merging the imported commits into given bookmark, master_bookmark
   Done checking path conflicts
   Creating a merge bonsai changeset with parents: e32a1e342cdb1e38e88466b4c1a01ae9f410024017aa21dc0a1c5da6b3963bf2, a1740c3d4a0f8e012b12c0c93f5a69cc902fe7398d8f334ef202f33c32fc247c
-  Created merge bonsai: 97a4e6df4c15db82ee1b428058a27b9fc274cb689f6eda481fdde33feff263bd and changeset: BonsaiChangeset { inner: BonsaiChangesetMut { parents: [ChangesetId(Blake2(e32a1e342cdb1e38e88466b4c1a01ae9f410024017aa21dc0a1c5da6b3963bf2)), ChangesetId(Blake2(a1740c3d4a0f8e012b12c0c93f5a69cc902fe7398d8f334ef202f33c32fc247c))], author: "user", author_date: DateTime(2005-04-02T21:37:00+01:00), committer: Some("user"), committer_date: Some(DateTime(2005-04-02T21:37:00+01:00)), message: "merging", hg_extra: {}, git_extra_headers: None, file_changes: {}, is_snapshot: false, git_tree_hash: None, git_annotated_tag: None }, id: ChangesetId(Blake2(97a4e6df4c15db82ee1b428058a27b9fc274cb689f6eda481fdde33feff263bd)) }
+  Created merge bonsai: 97a4e6df4c15db82ee1b428058a27b9fc274cb689f6eda481fdde33feff263bd and changeset: BonsaiChangeset { inner: BonsaiChangesetMut { parents: [ChangesetId(Blake2(e32a1e342cdb1e38e88466b4c1a01ae9f410024017aa21dc0a1c5da6b3963bf2)), ChangesetId(Blake2(a1740c3d4a0f8e012b12c0c93f5a69cc902fe7398d8f334ef202f33c32fc247c))], author: "user", author_date: DateTime(2005-04-02T21:37:00+01:00), committer: Some("user"), committer_date: Some(DateTime(2005-04-02T21:37:00+01:00)), message: "merging", hg_extra: {}, git_extra_headers: None, file_changes: {}, is_snapshot: false, git_tree_hash: None, git_annotated_tag: None, subtree_changes: {} }, id: ChangesetId(Blake2(97a4e6df4c15db82ee1b428058a27b9fc274cb689f6eda481fdde33feff263bd)) }
   Finished merging
   Running pushrebase
   Finished pushrebasing to 97a4e6df4c15db82ee1b428058a27b9fc274cb689f6eda481fdde33feff263bd
@@ -199,13 +209,13 @@
       "071d73e6b97823ffbde324c6147a785013f479157ade3f83c9b016c8f40c09de",
       "6f63fa96348a0854cd77a4b70f5b9b776e963735f92e283b67123161f1bc7bcd"
     ],
-    "hg_sync_check_disabled": true,
     "import_stage": "PushCommit",
     "imported_cs_id": "a1740c3d4a0f8e012b12c0c93f5a69cc902fe7398d8f334ef202f33c32fc247c",
     "mark_not_synced_mapping": null,
     "merged_cs_id": * (glob)
     "move_bookmark_commits_done": 1,
     "phab_check_disabled": true,
+    "print_gitimport_map": true,
     "recovery_file_path": "$TESTTMP/repo-git/recovery_file.json",
     "shifted_bcs_ids": [
       "4f830791a5ae7a2981d6c252d2be0bd7ebd3b1090080074b4b4bae6deb250b4a",

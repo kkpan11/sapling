@@ -25,6 +25,7 @@ use repo_authorization::RepoWriteOperation;
 use repo_update_logger::find_draft_ancestors;
 use repo_update_logger::BookmarkInfo;
 use repo_update_logger::BookmarkOperation;
+use repo_update_logger::CommitInfo;
 
 use crate::affected_changesets::AdditionalChangesets;
 use crate::affected_changesets::AffectedChangesets;
@@ -207,7 +208,8 @@ impl<'op> UpdateBookmarkOp<'op> {
             .check_update_permitted(ctx, repo, &self.bookmark, &self.targets, &self.pushvars)
             .await?;
 
-        self.affected_changesets
+        let validated_changesets = self
+            .affected_changesets
             .check_restrictions(
                 ctx,
                 authz,
@@ -264,16 +266,29 @@ impl<'op> UpdateBookmarkOp<'op> {
 
                 let to_log = async {
                     if self.log_new_public_commits_to_scribe {
-                        let res = find_draft_ancestors(ctx, repo, self.targets.new).await;
-                        match res {
-                            Ok(bcss) => bcss,
-                            Err(err) => {
-                                ctx.scuba().clone().log_with_msg(
-                                    "Failed to find draft ancestors",
-                                    Some(format!("{}", err)),
-                                );
-                                vec![]
+                        let repo_name = repo.repo_identity().name().to_string();
+                        let disable_prefetched_commits_for_logging = justknobs::eval(
+                            "scm/mononoke:disable_prefetched_commits_for_logging",
+                            None,
+                            Some(repo_name.as_str()),
+                        )
+                        .unwrap_or_default();
+                        if disable_prefetched_commits_for_logging {
+                            let res = find_draft_ancestors(ctx, repo, self.targets.new).await;
+                            match res {
+                                Ok(bcss) => {
+                                    bcss.iter().map(|bcs| CommitInfo::new(bcs, None)).collect()
+                                }
+                                Err(err) => {
+                                    ctx.scuba().clone().log_with_msg(
+                                        "Failed to find draft ancestors",
+                                        Some(format!("{}", err)),
+                                    );
+                                    vec![]
+                                }
                             }
+                        } else {
+                            validated_changesets
                         }
                     } else {
                         vec![]
