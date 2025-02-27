@@ -98,7 +98,6 @@ use util::path::create_dir;
 use util::path::create_shared_dir;
 use util::path::remove_file;
 
-use crate::datastore::ContentDataStore;
 use crate::datastore::ContentMetadata;
 use crate::datastore::Delta;
 use crate::datastore::HgIdDataStore;
@@ -844,18 +843,6 @@ impl HgIdDataStore for LfsStore {
         }
     }
 
-    fn get_meta(&self, key: StoreKey) -> Result<StoreResult<Metadata>> {
-        let entry = self.pointers.get(&key)?;
-        if let Some(entry) = entry {
-            Ok(StoreResult::Found(Metadata {
-                size: Some(entry.size),
-                flags: None,
-            }))
-        } else {
-            Ok(StoreResult::NotFound(key))
-        }
-    }
-
     fn refresh(&self) -> Result<()> {
         Ok(())
     }
@@ -888,7 +875,7 @@ impl From<LfsPointersEntry> for ContentMetadata {
     }
 }
 
-impl ContentDataStore for LfsStore {
+impl LfsStore {
     fn blob(&self, key: StoreKey) -> Result<StoreResult<Bytes>> {
         match self.blob_impl(key)? {
             StoreResult::Found((_, blob)) => Ok(StoreResult::Found(blob)),
@@ -896,7 +883,7 @@ impl ContentDataStore for LfsStore {
         }
     }
 
-    fn metadata(&self, key: StoreKey) -> Result<StoreResult<ContentMetadata>> {
+    pub fn metadata(&self, key: StoreKey) -> Result<StoreResult<ContentMetadata>> {
         let pointer = self.pointers.entry(&key)?;
 
         match pointer {
@@ -1089,7 +1076,7 @@ impl LfsRemote {
             let min_transfer_speed =
                 low_speed_min_bytes_per_second.map(|min_bytes_per_second| MinTransferSpeed {
                     min_bytes_per_second,
-                    grace_period: low_speed_grace_period,
+                    window: low_speed_grace_period,
                 });
 
             let download_chunk_size = config.get_opt::<u64>("lfs", "download-chunk-size")?;
@@ -1878,14 +1865,6 @@ impl HgIdDataStore for LfsRemoteStore {
     fn get(&self, key: StoreKey) -> Result<StoreResult<Vec<u8>>> {
         match self.prefetch(&[key.clone()]) {
             Ok(_) => self.store.get(key),
-            Err(_) if self.remote.ignore_prefetch_errors => Ok(StoreResult::NotFound(key)),
-            Err(e) => Err(e.context(format!("Failed to fetch: {:?}", key))),
-        }
-    }
-
-    fn get_meta(&self, key: StoreKey) -> Result<StoreResult<Metadata>> {
-        match self.prefetch(&[key.clone()]) {
-            Ok(_) => self.store.get_meta(key),
             Err(_) if self.remote.ignore_prefetch_errors => Ok(StoreResult::NotFound(key)),
             Err(e) => Err(e.context(format!("Failed to fetch: {:?}", key))),
         }

@@ -23,10 +23,11 @@ the script. This is useful for large repos that contain multiple projects, and
 thus multiple stable commits.
 """
 
+import os
 import re
 import subprocess
 
-from sapling import commands, encoding, error, json, pycompat, registrar, util
+from sapling import commands, encoding, error, json, registrar, util
 from sapling.i18n import _
 from sapling.revsetlang import getargsdict, getstring
 from sapling.smartset import baseset
@@ -206,7 +207,7 @@ def _executescript(script, repo, extraenv=None):
     ui.debug("Executing script: %s\n" % script)
 
     env = encoding.environ.copy()
-    env.update({"REAL_CWD": pycompat.getcwd(), "HG_ROOT": reporoot})
+    env.update({"REAL_CWD": os.getcwd(), "HG_ROOT": reporoot})
     if extraenv:
         env.update(extraenv)
     ui.debug("setting current working directory to: %s\n" % reporoot)
@@ -225,8 +226,8 @@ def _executescript(script, repo, extraenv=None):
     except subprocess.CalledProcessError as e:
         raise error.Abort(_("error executing script: %s") % e)
 
-    stdout = pycompat.decodeutf8(res[0])
-    stderr = pycompat.decodeutf8(res[1])
+    stdout = res[0].decode()
+    stderr = res[1].decode()
 
     ui.debug("script stdout:\n%s\n" % stdout)
     ui.write_err(stderr)

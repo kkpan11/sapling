@@ -9,12 +9,12 @@ license = "GPLv2+"
 
 [dependencies]
 anyhow = "1.0.95"
-async-trait = "0.1.71"
+async-trait = "0.1.86"
 fbinit = { version = "0.2.0", git = "https://github.com/facebookexperimental/rust-shed.git", branch = "main" }
 futures = { version = "0.3.30", features = ["async-await", "compat"] }
 itertools = "0.14.0"
 maplit = "1.0"
-openssl = "0.10.63"
+openssl = "0.10.70"
 serde = { version = "1.0.185", features = ["derive", "rc"] }
 serde_json = { version = "1.0.132", features = ["float_roundtrip", "unbounded_depth"] }
 tokio = { version = "1.41.0", features = ["full", "test-util", "tracing"] }

@@ -50,6 +50,28 @@ struct NFSMountOptions {
   std::optional<std::optional<bool>> dumbtimer;
 };
 
+/*
+ * Options for PrivHelper unmount requests.
+ */
+struct UnmountOptions {
+ public:
+  bool skip_serialize =
+      false; // when set, do not serialize the unmount options. This is used
+             // for handling the case when the privHelper server does not
+             // understand the unmount options
+  bool force = true; // default to force unmount
+  bool detach = true; // default to perform a lazy unmount
+
+  // future options
+  bool expire = false;
+};
+
+struct StopFileAccessMonitorResponse {
+  std::string tmpOutputPath;
+  std::string specifiedOutputPath;
+  bool shouldUpload;
+};
+
 /**
  * A helper class for performing operations that require elevated privileges.
  *
@@ -101,7 +123,8 @@ class PrivHelper {
    * Ask the privileged helper process to perform a fuse unmount.
    */
   FOLLY_NODISCARD virtual folly::Future<folly::Unit> fuseUnmount(
-      folly::StringPiece mountPath) = 0;
+      folly::StringPiece mountPath,
+      UnmountOptions options) = 0;
 
   FOLLY_NODISCARD virtual folly::Future<folly::Unit> nfsUnmount(
       folly::StringPiece mountPath) = 0;
@@ -163,6 +186,25 @@ class PrivHelper {
    * Get the PID of the privhelper server
    */
   FOLLY_NODISCARD virtual folly::Future<pid_t> getServerPid() = 0;
+
+  /**
+   * Start File Access Monitor(FAM).
+   *
+   * @param paths A list of paths to be monitored by FAM.
+   * @param outputPath The path to the output file.
+   * @return pid of the started FAM process
+   */
+  FOLLY_NODISCARD virtual folly::Future<pid_t> startFam(
+      const std::vector<std::string>& paths,
+      const std::string& tmpOutputPath,
+      const std::string& specifiedOutputPath,
+      const bool shouldUpload) = 0;
+
+  /**
+   * Stop File Access Monitor(FAM).
+   */
+  FOLLY_NODISCARD virtual folly::Future<StopFileAccessMonitorResponse>
+  stopFam() = 0;
 
   /**
    * setLogFileBlocking() is a wrapper around setLogFile() that blocks until

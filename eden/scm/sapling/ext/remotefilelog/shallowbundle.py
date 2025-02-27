@@ -15,16 +15,13 @@ from sapling import (
     mdiff,
     phases,
     progress,
-    pycompat,
     revlog,
     util,
 )
 from sapling.i18n import _
 from sapling.node import bin, hex, nullid
-from sapling.pycompat import range
 
 from . import remotefilelog, shallowutil
-
 
 NoFiles = NoTrees = 0
 # Local means: files and trees that are not available on the main server
@@ -252,7 +249,7 @@ class shallowcg1packer(changegroup.cg1packer):
 
         pointer += "x-is-binary %d\n" % meta["isbinary"]
 
-        return pycompat.encodeutf8(pointer)
+        return pointer.encode()
 
     def nodechunk(self, flog, node, _prevnode, linknode):
         prefix = b""
@@ -416,7 +413,7 @@ def addchangegroupfiles(orig, repo, source, revmap, trp, *args):
                     raise error.Abort("unexpected deltabase")
                 base = reconstruct(f, deltabase)
             rawtext = mdiff.patch(base, delta)
-            if isinstance(rawtext, pycompat.buffer):  # noqa
+            if isinstance(rawtext, memoryview):  # noqa
                 rawtext = bytes(rawtext)
             return rawtext
 

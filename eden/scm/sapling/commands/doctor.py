@@ -38,7 +38,7 @@ from .. import (
 )
 from ..i18n import _
 from ..node import bin, hex, nullhex, nullid, short
-from ..pycompat import decodeutf8, encodeutf8
+
 from .cmdtable import command
 
 
@@ -133,12 +133,11 @@ def doctor(ui, **opts) -> typing.Optional[int]:
         runedenfsdoctor(ui)
 
 
-def repairsvfs(ui, svfs, name: str, fixobj) -> None:
+def repairsvfs(ui, svfs, name: str, fixobj):
     """Attempt to repair path in repo.svfs"""
     path = svfs.join(name)
     repair(ui, name, path, fixobj.repair)
     if callable(fixobj):
-        # pyre-fixme[7]: Expected `None` but got `object`.
         return fixobj(path)
 
 
@@ -259,7 +258,7 @@ def openchangelog(ui, svfs):
 
 def repairvisibleheads(ui, metalog, cl):
     """Attempt to fix visibleheads by removing invalid commit hashes"""
-    oldtext = decodeutf8(metalog.get("visibleheads") or b"")
+    oldtext = (metalog.get("visibleheads") or b"").decode()
     oldlines = oldtext.splitlines()
     nodemap = cl.nodemap
     newlines = ["v1"] + [
@@ -274,7 +273,7 @@ def repairvisibleheads(ui, metalog, cl):
         if hextip not in newlines:
             newlines.append(hextip)
         newtext = "".join(l + "\n" for l in newlines)
-        metalog.set("visibleheads", encodeutf8(newtext))
+        metalog.set("visibleheads", newtext.encode())
         metalog.commit("fix visibleheads")
         ui.write_err(_("visibleheads: removed %s heads, added tip\n") % removedcount)
 

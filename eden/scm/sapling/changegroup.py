@@ -33,10 +33,9 @@ from typing import (
     Tuple,
 )
 
-from . import error, mdiff, perftrace, phases, progress, pycompat, util, visibility
+from . import error, mdiff, perftrace, phases, progress, util, visibility
 from .i18n import _
 from .node import hex, nullrev
-from .pycompat import decodeutf8, encodeutf8, range
 
 CFG_CGDELTA_ALWAYS_NULL = "always-null"
 CFG_CGDELTA_NO_EXTERNAL = "no-external"
@@ -206,7 +205,7 @@ class cg1unpacker:
         l = self._chunklength()
         if not l:
             return {}
-        fname = decodeutf8(readexactly(self._stream, l))
+        fname = readexactly(self._stream, l).decode()
         return {"filename": fname}
 
     def _deltaheader(
@@ -583,7 +582,7 @@ class cg1packer:
         return closechunk()
 
     def fileheader(self, fname):
-        fname = encodeutf8(fname)
+        fname = fname.encode()
         return chunkheader(len(fname)) + fname
 
     # Extracted both for clarity and for overriding in extensions.

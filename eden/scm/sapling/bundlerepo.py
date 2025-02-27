@@ -38,7 +38,6 @@ from . import (
     mutation,
     pathutil,
     phases,
-    pycompat,
     revlog,
     util,
     vfs as vfsmod,
@@ -46,7 +45,6 @@ from . import (
 )
 from .i18n import _
 from .node import nullid
-from .pycompat import isint
 
 
 class bundlerevlog(revlog.revlog):
@@ -161,7 +159,7 @@ class bundlerevlog(revlog.revlog):
         """return an uncompressed revision of a given node or revision
         number.
         """
-        if isint(nodeorrev):
+        if isinstance(nodeorrev, int):
             rev = nodeorrev
             node = self.node(rev)
         else:
@@ -275,7 +273,7 @@ class bundlemanifest(bundlerevlog, manifest.manifestrevlog):
 
     def baserevision(self, nodeorrev):
         node = nodeorrev
-        if isint(node):
+        if isinstance(node, int):
             node = self.node(node)
 
         if node in self.fulltextcache:
@@ -430,7 +428,7 @@ class bundlerepository(localrepo.localrepository):
         self.tempfile = temp
 
         with util.fdopen(fdtemp, "wb") as fptemp:
-            fptemp.write(pycompat.encodeutf8(header))
+            fptemp.write(header.encode())
             while True:
                 chunk = readfn(2**18)
                 if not chunk:
@@ -538,7 +536,7 @@ class bundlerepository(localrepo.localrepository):
         return bundlepeer(self)
 
     def getcwd(self) -> str:
-        return pycompat.getcwd()  # always outside the repo
+        return os.getcwd()  # always outside the repo
 
     # Check if parents exist in localrepo before setting
     def setparents(self, p1: bytes, p2: bytes = nullid) -> None:
@@ -554,13 +552,13 @@ def instance(ui, path, create, initial_config):
     parentpath = ui.config("bundle", "mainreporoot")
     if not parentpath:
         # try to find the correct path to the working directory repo
-        parentpath = cmdutil.findrepo(pycompat.getcwd())
+        parentpath = cmdutil.findrepo(os.getcwd())
         if parentpath is None:
             parentpath = ""
     if parentpath:
         # Try to make the full path relative so we get a nice, short URL.
         # In particular, we don't want temp dir names in test outputs.
-        cwd = pycompat.getcwd()
+        cwd = os.getcwd()
         if parentpath == cwd:
             parentpath = ""
         else:

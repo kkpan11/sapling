@@ -8,7 +8,6 @@
 //! Path-related utilities.
 
 use std::borrow::Cow;
-use std::collections::HashSet;
 use std::env;
 use std::ffi::OsStr;
 use std::fs;
@@ -22,8 +21,6 @@ use std::path::Component;
 use std::path::Path;
 use std::path::PathBuf;
 
-use anyhow::bail;
-use anyhow::Context;
 use fn_error_context::context;
 
 use crate::errors::IOContext;
@@ -357,6 +354,8 @@ fn add_stat_context<T, E: Into<anyhow::Error>>(
 ) -> anyhow::Result<T, anyhow::Error> {
     use std::os::unix::fs::MetadataExt;
 
+    use anyhow::Context;
+
     let res = res.map_err(Into::into);
 
     if let Some(path) = path {
@@ -381,6 +380,10 @@ fn add_stat_context<T, E: Into<anyhow::Error>>(
 /// Propagates unexpected errors like permission errors.
 #[cfg(unix)]
 fn resolve_symlinks(path: &Path) -> anyhow::Result<PathBuf> {
+    use std::collections::HashSet;
+
+    use anyhow::bail;
+    use anyhow::Context;
     fn inner(path: PathBuf, seen: &mut HashSet<PathBuf>) -> anyhow::Result<PathBuf> {
         if seen.contains(&path) {
             bail!("symlink cycle containing {:?}", path);
@@ -420,6 +423,7 @@ fn resolve_symlinks(path: &Path) -> anyhow::Result<PathBuf> {
 #[context("creating dir {:?} with mode 0o{:o}", path, mode)]
 fn create_dir_with_mode(path: &Path, mode: u32) -> anyhow::Result<()> {
     use anyhow::anyhow;
+    use anyhow::Context;
 
     let path = resolve_symlinks(path)?;
 
@@ -474,9 +478,15 @@ fn create_dir_with_mode(path: &Path, mode: u32) -> anyhow::Result<()> {
         // platform we are on.
         // Similarly, when the destinated directory is a file, we get `ENOTDIR` instead of `EEXIST`.
         match e.raw_os_error() {
-            Some(libc::ENOTEMPTY) | Some(libc::ENOTDIR) => {
-                Err(io::Error::from(ErrorKind::AlreadyExists).into())
+            Some(libc::ENOTEMPTY) => {
+                // Target directory exists now - we probably raced with someone else to create it.
+
+                // Best effort to fix permissions.
+                let _ = fs::set_permissions(path, fs::Permissions::from_mode(mode));
+
+                Ok(())
             }
+            Some(libc::ENOTDIR) => Err(io::Error::from(ErrorKind::AlreadyExists).into()),
             _ => Err::<(), anyhow::Error>(e.into())
                 .context(format!("renaming temp dir {:?} to {:?}", temp, &path)),
         }
@@ -695,6 +705,7 @@ pub fn replace_slash_with_backslash(path: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use std::fs::create_dir_all;
+    use std::fs::remove_dir_all;
     use std::fs::File;
 
     use anyhow::Result;
@@ -1118,5 +1129,28 @@ mod tests {
         assert!(root_relative_path(&root, &root, &parent.join("rootbeer"))?.is_none());
 
         Ok(())
+    }
+
+    #[test]
+    // Windows doesn't suffer from the issue being tested, but has a different, less
+    // important issue.
+    #[cfg_attr(windows, ignore)]
+    fn test_create_dir_with_mode_race() {
+        let tempdir = TempDir::new().unwrap();
+
+        let dir = tempdir.path().join("dir");
+
+        // Make sure we don't have race conditions between threads creating the same dir.
+        std::thread::scope(|s| {
+            for _ in 0..10 {
+                s.spawn(|| {
+                    for _ in 0..100 {
+                        create_dir_with_mode(&dir, 0o755).unwrap();
+                        let _ = std::fs::write(dir.join("file"), "contents");
+                        let _ = remove_dir_all(&dir);
+                    }
+                });
+            }
+        });
     }
 }

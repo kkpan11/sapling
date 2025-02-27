@@ -13,13 +13,11 @@ use context::CoreContext;
 use mononoke_types::ChangesetId;
 use scuba_ext::MononokeScubaSampleBuilder;
 use scuba_ext::ScubaValue;
-use slog::crit;
 use slog::debug;
 use slog::error;
 use slog::info;
 use slog::trace;
 use slog::warn;
-use slog::Drain;
 
 const SCUBA_TABLE: &str = "mononoke_x_repo_mapping";
 
@@ -121,9 +119,6 @@ pub fn get_scuba_sample(
 
 // Helpers to log both to terminal and to scuba
 
-pub fn _log_critical<S: Into<String>>(ctx: &CoreContext, msg: S) {
-    log_with_level(ctx, slog::Level::Critical, msg);
-}
 pub fn log_error<S: Into<String>>(ctx: &CoreContext, msg: S) {
     log_with_level(ctx, slog::Level::Error, msg);
 }
@@ -149,7 +144,7 @@ fn log_with_level<S: Into<String>>(ctx: &CoreContext, level: slog::Level, msg: S
 
     let level_tag = match level {
         slog::Level::Critical => {
-            crit!(ctx.logger(), "{}", msg);
+            error!(ctx.logger(), "{}", msg);
             "CRITICAL"
         }
         slog::Level::Error => {

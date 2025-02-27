@@ -23,7 +23,6 @@ use super::SaplingRemoteApiStoreKind;
 use super::Tree;
 use crate::datastore::HgIdDataStore;
 use crate::datastore::HgIdMutableDeltaStore;
-use crate::datastore::Metadata;
 use crate::datastore::RemoteDataStore;
 use crate::datastore::StoreResult;
 use crate::localstore::LocalStore;
@@ -175,11 +174,6 @@ impl HgIdDataStore for SaplingRemoteApiDataStore<File> {
         self.store.get(key)
     }
 
-    fn get_meta(&self, key: StoreKey) -> Result<StoreResult<Metadata>> {
-        self.prefetch(&[key.clone()])?;
-        self.store.get_meta(key)
-    }
-
     fn refresh(&self) -> Result<()> {
         Ok(())
     }
@@ -189,11 +183,6 @@ impl HgIdDataStore for SaplingRemoteApiDataStore<Tree> {
     fn get(&self, key: StoreKey) -> Result<StoreResult<Vec<u8>>> {
         self.prefetch(&[key.clone()])?;
         self.store.get(key)
-    }
-
-    fn get_meta(&self, key: StoreKey) -> Result<StoreResult<Metadata>> {
-        self.prefetch(&[key.clone()])?;
-        self.store.get_meta(key)
     }
 
     fn refresh(&self) -> Result<()> {
@@ -275,7 +264,7 @@ mod tests {
         assert_eq!(fetched.file_content()?.to_vec(), d.data.as_ref().to_vec());
 
         // Check that data was written to the local store.
-        let fetched = cache.get_entry(k)?.expect("key not found");
+        let fetched = cache.get_entry(&k.hgid)?.expect("key not found");
         assert_eq!(fetched.content()?.to_vec(), d.data.as_ref().to_vec());
 
         Ok(())
@@ -322,7 +311,7 @@ mod tests {
         assert_eq!(fetched.file_content()?.to_vec(), d.data.as_ref().to_vec());
 
         // Check that data was written to the local store.
-        let fetched = cache.get_entry(k)?.expect("key not found");
+        let fetched = cache.get_entry(&k.hgid)?.expect("key not found");
         assert_eq!(fetched.content()?.to_vec(), d.data.as_ref().to_vec());
 
         Ok(())
@@ -372,7 +361,7 @@ mod tests {
         );
 
         // Check that data was written to the local store.
-        let fetched = cache.get_entry(k)?.expect("key not found");
+        let fetched = cache.get_entry(&k.hgid)?.expect("key not found");
         assert_eq!(fetched.content()?.to_vec(), d.data.as_ref().to_vec());
 
         Ok(())
@@ -422,7 +411,7 @@ mod tests {
         );
 
         // Check that data was written to the local store.
-        let fetched = cache.get_entry(k)?.expect("key not found");
+        let fetched = cache.get_entry(&k.hgid)?.expect("key not found");
         assert_eq!(fetched.content()?.to_vec(), d.data.as_ref().to_vec());
 
         Ok(())
@@ -521,7 +510,7 @@ mod tests {
         assert_eq!(fetched.aux_data().expect("no aux data found"), expected);
 
         // Content shouldn't have been cached
-        assert_eq!(cache.get_entry(k)?, None);
+        assert_eq!(cache.get_entry(&k.hgid)?, None);
 
         Ok(())
     }

@@ -116,15 +116,22 @@ pub async fn new_batch_derivation(
     file_changes: Vec<StackItem>,
     already_derived: &mut HashMap<ChangesetId, RootFsnodeId>,
 ) -> Result<(), Error> {
-    if parent_fsnode_manifests.len() > 1 {
-        // we can't derive stack for a merge commit,
+    if file_changes.len() == 1 || parent_fsnode_manifests.len() > 1 {
+        // we can't derive stack for a merge commit or a commit with subtree copies
         // so let's derive it without batching
         for item in file_changes {
             let bonsai = item.cs_id.load(ctx, derivation_ctx.blobstore()).await?;
             let parents = derivation_ctx
                 .fetch_unknown_parents(ctx, Some(already_derived), &bonsai)
                 .await?;
-            let derived = RootFsnodeId::derive_single(ctx, derivation_ctx, bonsai, parents).await?;
+            let derived = RootFsnodeId::derive_single(
+                ctx,
+                derivation_ctx,
+                bonsai,
+                parents,
+                Some(already_derived),
+            )
+            .await?;
             already_derived.insert(item.cs_id, derived);
         }
     } else {

@@ -44,7 +44,7 @@
   $ find -type f -name '*git_object*' -delete
 
 # Regenerate git commits and trees
-  $ quiet mononoke_admin derived-data -R repo derive -T git_trees -T git_commits -T git_delta_manifests_v2 -T unodes --all-bookmarks
+  $ quiet mononoke_admin derived-data -R repo derive -T git_commits -T git_delta_manifests_v2 -T unodes --all-bookmarks
 
 # Capture the new bonsai_git_mapping output representing the git commits re-generated for the bonsais
   $ sqlite3 "$TESTTMP/monsql/sqlite_dbs" "SELECT hex(git_sha1) as git_id, hex(bcs_id) as bonsai_id FROM bonsai_git_mapping ORDER BY hex(git_sha1)" > new_bonsai_git_mapping
@@ -55,8 +55,7 @@
 # Start up the Mononoke Git Service
   $ mononoke_git_service
 # Clone the Git repo from Mononoke
-  $ git_client clone $MONONOKE_GIT_SERVICE_BASE_URL/$REPONAME.git
-  Cloning into 'repo'...
+  $ quiet git_client clone $MONONOKE_GIT_SERVICE_BASE_URL/$REPONAME.git
 # Verify that we get the same Git repo back that we started with
   $ cd $REPONAME  
   $ git rev-list --objects --all | git cat-file --batch-check='%(objectname) %(objecttype) %(rest)' | sort > $TESTTMP/new_object_list

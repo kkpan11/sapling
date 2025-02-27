@@ -18,7 +18,6 @@ from sapling import (
     localrepo,
     merge as mergemod,
     node as nodeutil,
-    pycompat,
     registrar,
     scmutil,
 )
@@ -51,8 +50,7 @@ def conflictsmsg(repo, ui):
     if unresolvedlist:
         mergeliststr = "\n".join(
             [
-                "    %s"
-                % os.path.relpath(os.path.join(repo.root, path), pycompat.getcwd())
+                "    %s" % os.path.relpath(os.path.join(repo.root, path), os.getcwd())
                 for path in unresolvedlist
             ]
         )
@@ -159,8 +157,8 @@ def bisectmsg(repo, ui):
 
     if len(state["good"]) > 0 and len(state["bad"]) > 0:
         try:
-            nodes, commitsremaining, badtogood, rightnode, leftnode = hbisect.bisect(
-                repo, state
+            nodes, _untested, commitsremaining, badtogood, rightnode, leftnode = (
+                hbisect.bisect(repo, state)
             )
 
             searchesremaining = (

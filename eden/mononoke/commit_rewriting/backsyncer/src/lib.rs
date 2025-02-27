@@ -72,6 +72,7 @@ use futures::TryStreamExt;
 use futures_stats::TimedTryFutureExt;
 use metaconfig_types::RepoConfig;
 use metaconfig_types::RepoConfigRef;
+use mononoke_macros::mononoke;
 use mononoke_types::ChangesetId;
 use mononoke_types::Globalrev;
 use mononoke_types::RepositoryId;
@@ -88,7 +89,8 @@ use repo_derived_data::RepoDerivedData;
 use repo_identity::RepoIdentity;
 use repo_identity::RepoIdentityRef;
 use repo_update_logger::find_draft_ancestors;
-use repo_update_logger::log_new_bonsai_changesets;
+use repo_update_logger::log_new_commits;
+use repo_update_logger::CommitInfo;
 use scuba_ext::MononokeScubaSampleBuilder;
 use slog::debug;
 use slog::error;
@@ -343,7 +345,11 @@ where
     }
     debug!(ctx.logger(), "backsyncing {} ...", entry_id);
 
-    if commit_syncer.get_bookmark_renamer().await?(&entry.bookmark_name).is_none() {
+    if commit_syncer
+        .rename_bookmark(&entry.bookmark_name)
+        .await?
+        .is_none()
+    {
         // For the bookmarks that don't remap to small repos we can skip. But it's
         // still valuable to have commit mapping ready for them. That's why we spawn
         // a commit backsync future that we don't wait for here. Each of such futures
@@ -363,7 +369,7 @@ where
         if let Some(to_cs_id) = entry.to_changeset_id {
             commit_only_backsync_future = Box::new({
                 cloned!(ctx, sync_context, to_cs_id, commit_syncer);
-                tokio::spawn(async move {
+                mononoke::spawn_task(async move {
                     commit_only_backsync_future.await;
                     let res = commit_syncer
                         .sync_commit(
@@ -545,7 +551,9 @@ where
     debug!(ctx.logger(), "preparing to backsync {:?}", log_entry);
 
     let new_counter = log_entry.id;
-    let bookmark = commit_syncer.get_bookmark_renamer().await?(&log_entry.bookmark_name);
+    let bookmark = commit_syncer
+        .rename_bookmark(&log_entry.bookmark_name)
+        .await?;
     debug!(ctx.logger(), "bookmark was renamed into {:?}", bookmark);
     let from_cs_id = log_entry.from_changeset_id;
     let to_cs_id = log_entry.to_changeset_id;
@@ -638,7 +646,7 @@ where
                     Some(to_cs_id) => {
                         let res = find_draft_ancestors(&ctx, target_repo, to_cs_id).await;
                         match res {
-                            Ok(bcss) => bcss,
+                            Ok(bcss) => bcss.iter().map(|bcs| CommitInfo::new(bcs, None)).collect(),
                             Err(err) => {
                                 ctx.scuba().clone().log_with_msg(
                                     "Failed to find draft ancestors for logging",
@@ -730,11 +738,10 @@ where
                 .commit_with_hooks(vec![txn_hook])
                 .await?
                 .map(|x| x.into());
-            log_new_bonsai_changesets(
+            log_new_commits(
                 &ctx,
                 target_repo,
-                &bookmark,
-                BookmarkKind::Publishing,
+                Some((&bookmark, BookmarkKind::Publishing)),
                 commits_to_log,
             )
             .await;

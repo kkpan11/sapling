@@ -39,14 +39,12 @@ import sapling.localrepo
 
 from . import (
     context,
-    encoding,
     error,
     filesystem,
     identity,
     match as matchmod,
     pathutil,
     perftrace,
-    pycompat,
     scmutil,
     transaction,
     treestate,
@@ -213,11 +211,11 @@ class dirstate:
     def _slash(self) -> bool:
         return (
             self._ui.plain() or self._ui.configbool("ui", "slash")
-        ) and pycompat.ossep != "/"
+        ) and os.sep != "/"
 
     @util.propertycache
     def _checklink(self) -> bool:
-        if pycompat.iswindows and "windowssymlinks" not in self._repo.requirements:
+        if util.iswindows and "windowssymlinks" not in self._repo.requirements:
             return False
         return util.checklink(self._root)
 
@@ -282,7 +280,7 @@ class dirstate:
         forcecwd = self._ui.config("ui", "forcecwd")
         if forcecwd:
             return forcecwd
-        return pycompat.getcwd()
+        return os.getcwd()
 
     def getcwd(self) -> str:
         """Return the path from which a canonical path is calculated.
@@ -297,7 +295,7 @@ class dirstate:
         # self._root ends with a path separator if self._root is '/' or 'C:\'
         rootsep = self._root
         if not util.endswithsep(rootsep):
-            rootsep += pycompat.ossep
+            rootsep += os.sep
         if cwd.startswith(rootsep):
             return cwd[len(rootsep) :]
         else:
@@ -333,8 +331,6 @@ class dirstate:
     # pyre-fixme[11]: Annotation `dirstatetuple` is not defined as a type.
     def items(self) -> "Iterable[Tuple[str, dirstatetuple]]":
         return self._map.items()
-
-    iteritems: "Callable[[dirstate], Iterable[Tuple[str, dirstatetuple]]]" = items
 
     def parents(self) -> "List[bytes]":
         # (This always returns a list of length 2.  Perhaps we should change it to
@@ -876,7 +872,7 @@ class dirstate:
             except OSError as ex:
                 if path not in seenset:
                     # This handles does-not-exist, permission error, etc.
-                    match.bad(path, encoding.strtolocal(ex.strerror))
+                    match.bad(path, ex.strerror)
                 continue
 
             typ = stat.S_IFMT(st.st_mode)

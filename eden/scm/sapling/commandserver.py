@@ -14,21 +14,21 @@ from __future__ import absolute_import
 
 import errno
 import gc
+import io
 import os
 import random
-
 import selectors
 import signal
 import socket
 import struct
+import sys
 import traceback
 from typing import Any, BinaryIO, List, Tuple
 
 import bindings
 
-from . import encoding, error, pycompat, util
+from . import encoding, error, util
 from .i18n import _
-
 
 logfile = None
 
@@ -96,7 +96,7 @@ class channeledinput:
 
     @property
     def name(self) -> str:
-        return "<%c-channel>" % pycompat.decodeutf8(self.channel)
+        return "<%c-channel>" % self.channel.decode()
 
     def read(self, size: int = -1) -> bytes:
         if size < 0:
@@ -168,7 +168,7 @@ class server:
     def __init__(
         self, ui: "Any", repo: "Any", fin: "BinaryIO", fout: "BinaryIO"
     ) -> None:
-        self.cwd = pycompat.getcwd()
+        self.cwd = os.getcwd()
 
         # developer config: cmdserver.log
         logpath = ui.config("cmdserver", "log")
@@ -224,7 +224,7 @@ class server:
         """read a list of NULL separated strings from the channel"""
         s = self._readstr()
         if s:
-            s = pycompat.decodeutf8(s)
+            s = s.decode()
             return s.split("\0")
         else:
             return []
@@ -234,10 +234,10 @@ class server:
         and writes the return code to the result channel"""
 
         args = self._readlist()
-        pycompat.sysargv[1:] = args
+        sys.argv[1:] = args
 
         ret = bindings.commands.run(
-            [pycompat.sysargv[0]] + args, self.cin, self.cout, self.cerr
+            [sys.argv[0]] + args, self.cin, self.cout, self.cerr
         )
 
         # restore old cwd
@@ -248,11 +248,11 @@ class server:
 
     def getencoding(self) -> None:
         """writes the current encoding to the result channel"""
-        self.cresult.write(pycompat.encodeutf8(encoding.encoding))
+        self.cresult.write(encoding.encoding.encode())
 
     def serveone(self) -> bool:
         cmd = self.client.readline()[:-1]
-        cmd = pycompat.decodeutf8(cmd)
+        cmd = cmd.decode()
         if cmd:
             handler = self.capabilities.get(cmd)
             if handler:
@@ -289,7 +289,7 @@ class server:
             pass
 
         # write the hello msg in -one- chunk
-        self.cout.write(pycompat.encodeutf8(hellomsg))
+        self.cout.write(hellomsg.encode())
 
         try:
             while self.serveone():
@@ -386,12 +386,12 @@ def _serverequest(ui, repo, conn, createcmdserver):
     except:  # re-raises
         # print_exc requires a string file-like object in Python 3, so let's get
         # it a buffer then convert it to bytes before sending it to the server.
-        output = pycompat.stringutf8io()
+        output = io.StringIO()
         traceback.print_exc(file=output)
 
         # also write traceback to error channel. otherwise client cannot
         # see it because it is written to server's stderr by default.
-        output = pycompat.encodeutf8(output.getvalue())
+        output = output.getvalue().encode()
         if sv:
             sv.cerr.write(output)
         else:

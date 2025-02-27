@@ -37,8 +37,8 @@ use mononoke_types::NonRootMPath;
 use slog::debug;
 use stats::prelude::*;
 
-use crate::derive::derive_unode_manifest;
 use crate::derive::derive_unode_manifest_stack;
+use crate::derive::derive_unode_manifest_with_subtree_changes;
 
 define_stats! {
     prefix = "mononoke.derived_data.unodes";
@@ -96,17 +96,20 @@ impl BonsaiDerivable for RootUnodeManifestId {
         derivation_ctx: &DerivationContext,
         bonsai: BonsaiChangeset,
         parents: Vec<Self>,
+        _known: Option<&HashMap<ChangesetId, Self>>,
     ) -> Result<Self> {
         let csid = bonsai.get_changeset_id();
-        derive_unode_manifest(
+        derive_unode_manifest_with_subtree_changes(
             ctx,
             derivation_ctx,
+            None,
             csid,
             parents
                 .into_iter()
                 .map(|root_mf_id| root_mf_id.manifest_unode_id().clone())
                 .collect(),
             get_file_changes(&bonsai),
+            bonsai.subtree_changes(),
         )
         .map_ok(RootUnodeManifestId)
         .await
@@ -144,16 +147,27 @@ impl BonsaiDerivable for RootUnodeManifestId {
                 );
             }
 
-            if derived_parents.len() > 1 {
-                // we can't derive stack for a merge commit,
-                // so let's derive it without batching
+            if stack.stack_items.len() == 1 {
+                // derive a single commit without batching
                 for item in stack.stack_items {
                     let bonsai = item.cs_id.load(ctx, derivation_ctx.blobstore()).await?;
                     let parents = derivation_ctx
                         .fetch_unknown_parents(ctx, Some(&res), &bonsai)
                         .await?;
-                    let derived = Self::derive_single(ctx, derivation_ctx, bonsai, parents).await?;
-                    res.insert(item.cs_id, derived);
+                    let derived = derive_unode_manifest_with_subtree_changes(
+                        ctx,
+                        derivation_ctx,
+                        Some(&res),
+                        bonsai.get_changeset_id(),
+                        parents
+                            .into_iter()
+                            .map(|root_mf_id| root_mf_id.manifest_unode_id().clone())
+                            .collect(),
+                        get_file_changes(&bonsai),
+                        bonsai.subtree_changes(),
+                    )
+                    .await?;
+                    res.insert(item.cs_id, RootUnodeManifestId(derived));
                 }
             } else {
                 let first = stack.stack_items.first().map(|item| item.cs_id);

@@ -11,7 +11,6 @@ import socket
 
 from sapling import vfs as vfsmod
 from sapling.i18n import _
-from sapling.pycompat import encodeutf8
 
 from . import error as ccerror, util as ccutil, workspace
 
@@ -23,7 +22,7 @@ def _uniquefilename(reporoot, reponame, workspacename):
             reporoot = "$TESTTMP/" + reporoot.removeprefix(testtmp).replace("\\", "/")
 
     hash = hashlib.sha256(
-        encodeutf8("\0".join([reporoot, reponame, workspacename]))
+        "\0".join([reporoot, reponame, workspacename]).encode()
     ).hexdigest()
     return hash[:32]
 
@@ -61,10 +60,10 @@ def check(repo):
                 "check: writing subscription %s\n" % filename, component="commitcloud"
             )
             configfile.write(
-                encodeutf8(
+                (
                     "[commitcloud]\nworkspace=%s\nrepo_name=%s\nrepo_root=%s\n"
                     % (workspacename, reponame, repo.sharedpath)
-                )
+                ).encode()
             )
             didsomething = True
 
@@ -137,10 +136,10 @@ def move(repo, workspace, new_workspace):
         vfs.tryunlink(oldsrc)
         with vfs.open(dst, "wb") as configfile:
             configfile.write(
-                encodeutf8(
+                (
                     "[commitcloud]\nworkspace=%s\nrepo_name=%s\nrepo_root=%s\n"
                     % (new_workspace, reponame, repo.sharedpath)
-                )
+                ).encode()
             )
         if olddst != dst and vfs.exists(olddst):
             repo.ui.debug(
@@ -154,7 +153,7 @@ def move(repo, workspace, new_workspace):
 def _warn_service_not_running(ui):
     ui.status(
         _(
-            "scm daemon is not running and automatic synchronization may not work\n"
+            "SCM daemon is not running and automatic synchronization may not work\n"
             "(run '@prog@ cloud sync' manually if your workspace is not synchronized)\n"
             "(please contact %s if this warning persists)\n"
         )

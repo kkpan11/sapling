@@ -14,7 +14,7 @@ name = "copytrace"
 
 [dependencies]
 anyhow = "1.0.95"
-async-trait = "0.1.71"
+async-trait = "0.1.86"
 lru-cache = "0.1.2"
 parking_lot = { version = "0.12.1", features = ["send_guard"] }
 sapling-async-runtime = { version = "0.1.0", path = "../async-runtime" }
@@ -35,4 +35,4 @@ tracing = { version = "0.1.41", features = ["attributes", "valuable"] }
 [dev-dependencies]
 sapling-manifest-tree = { version = "0.1.0", path = "../manifest-tree", features = ["for-tests"] }
 tokio = { version = "1.41.0", features = ["full", "test-util", "tracing"] }
-tracing-test = "0.2.3"
+tracing-test = { version = "0.2.3", features = ["no-env-filter"] }

@@ -76,6 +76,10 @@ pub struct ImportArgs {
     /// specify the name of that mapping.
     #[clap(long)]
     pub mark_not_synced_mapping: Option<String>,
+    /// Print the mapping of git commit id -> bonsai changeset id after importing
+    /// all git commits.
+    #[clap(long, default_value_t = false)]
+    pub print_gitimport_map: bool,
 }
 
 //recover-process
@@ -124,7 +128,6 @@ pub fn setup_import_args(import_args: ImportArgs) -> RecoveryFields {
             .additional_setup_steps_args
             .disable_phabricator_check,
         x_repo_check_disabled: import_args.disable_x_repo_check,
-        hg_sync_check_disabled: import_args.disable_hg_sync_check,
         sleep_time: Duration::from_secs(import_args.sleep_time_secs),
         dest_bookmark_name: import_args.additional_setup_steps_args.dest_bookmark,
         commit_author: import_args.commit_author,
@@ -138,5 +141,6 @@ pub fn setup_import_args(import_args: ImportArgs) -> RecoveryFields {
         gitimport_bcs_ids: None,
         merged_cs_id: None,
         git_merge_bcs_id: None,
+        print_gitimport_map: import_args.print_gitimport_map,
     }
 }

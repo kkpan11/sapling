@@ -60,7 +60,6 @@ from . import (
     peer,
     phases,
     pushkey,
-    pycompat,
     repository,
     revset,
     revsetlang,
@@ -74,7 +73,6 @@ from . import (
 )
 from .i18n import _, _n
 from .node import bin, hex, nullhex, nullid
-from .pycompat import range
 from .utils import subtreeutil
 
 release = lockmod.release
@@ -531,9 +529,7 @@ class localrepository:
             self.requirements.remove("windowssymlinks")
 
         # wvfs: rooted at the repository root, used to access the working copy
-        disablesymlinks = (
-            pycompat.iswindows and "windowssymlinks" not in self.requirements
-        )
+        disablesymlinks = util.iswindows and "windowssymlinks" not in self.requirements
         self.wvfs = vfsmod.vfs(
             path,
             expandpath=True,
@@ -766,7 +762,7 @@ class localrepository:
                         if line not in lines:
                             toadd += line
                     with self.svfs.open("phaseroots", "ab") as f:
-                        f.write(pycompat.encodeutf8(toadd))
+                        f.write(toadd.encode())
                     self.storerequirements.remove("narrowheads")
                     self._writestorerequirements()
 
@@ -1106,9 +1102,13 @@ class localrepository:
                 git.pull(self, source, names=bookmarknames, nodes=headnodes)
             return
 
-        with self.conn(source) as conn, self.wlock(), self.lock(), self.transaction(
-            "pull"
-        ), self.ui.configoverride(configoverride):
+        with (
+            self.conn(source) as conn,
+            self.wlock(),
+            self.lock(),
+            self.transaction("pull"),
+            self.ui.configoverride(configoverride),
+        ):
             remote = conn.peer
             remotenamechanges = {}  # changes to remotenames, {name: hexnode}
             heads = set()
@@ -1759,7 +1759,7 @@ class localrepository:
 
     def wread(self, filename):
         if self.wvfs.islink(filename):
-            return pycompat.encodeutf8(self.wvfs.readlink(filename))
+            return self.wvfs.readlink(filename).encode()
         else:
             return self.wvfs.read(filename)
 
@@ -2108,7 +2108,7 @@ class localrepository:
     def _rollback(self, dryrun, force, dsguard):
         ui = self.ui
         try:
-            args = pycompat.decodeutf8(self.localvfs.read("undo.desc")).splitlines()
+            args = self.localvfs.read("undo.desc").decode().splitlines()
             (oldlen, desc, detail) = (int(args[0]), args[1], None)
             if len(args) >= 3:
                 detail = args[2]
@@ -2649,7 +2649,7 @@ class localrepository:
         # is the file changed?
         text = fctx.data()
         if (
-            pycompat.iswindows
+            util.iswindows
             and "windowssymlinks" in self.requirements
             and "l" in fctx.flags()
         ):
@@ -3124,7 +3124,7 @@ class localrepository:
         except errormod.HookAbort as exc:
             self.ui.write_err(_("pushkey-abort: %s\n") % exc)
             if exc.hint:
-                self.ui.write_err(_("(%s)\n") % exc.hint)
+                self.ui.write_err(_("(%s)\n") % exc.hint, label="ui.hint")
             return False
         self.ui.debug('pushing key for "%s:%s"\n' % (namespace, key))
         ret = pushkey.push(self, namespace, key, old, new)

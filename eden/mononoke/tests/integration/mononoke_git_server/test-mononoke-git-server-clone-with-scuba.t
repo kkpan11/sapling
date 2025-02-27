@@ -35,8 +35,7 @@
 # Start up the Mononoke Git Service
   $ mononoke_git_service
 # Clone the Git repo from Mononoke
-  $ git_client clone $MONONOKE_GIT_SERVICE_BASE_URL/$REPONAME.git
-  Cloning into 'repo'...
+  $ quiet git_client clone $MONONOKE_GIT_SERVICE_BASE_URL/$REPONAME.git
 
 # A single Git clone involves three requests to the Git server. Check if we
 # have 3 scuba records corresponding to the request
@@ -54,10 +53,60 @@
     "stream_poll_time_us": *, (glob)
 
 # Verify the future statistics get recorded in scuba
-  $ jq -S .int "$SCUBA" | grep [^_]poll
+  $ jq -S .int "$SCUBA" | grep [^_]poll | head -6
     "poll_count": *, (glob)
     "poll_time_us": *, (glob)
     "poll_count": *, (glob)
     "poll_time_us": *, (glob)
     "poll_count": *, (glob)
     "poll_time_us": *, (glob)
+
+# Verify the method variants in scuba as a normvector
+  $ jq .normvector.method_variants "$SCUBA" | grep -v null 
+  [
+    "standard"
+  ]
+  [
+    "standard"
+  ]
+  [
+    "standard"
+  ]
+  [
+    "standard"
+  ]
+  [
+    "standard"
+  ]
+  [
+    "standard"
+  ]
+  [
+    "standard"
+  ]
+  [
+    "standard"
+  ]
+  [
+    "standard"
+  ]
+  [
+    "standard"
+  ]
+
+# Verify the timed futures logged with log tags and msgs show up in scuba logs
+  $ jq .normal "$SCUBA" | grep -e "Converted" -e "Counted" -e "Generated" -e "Collected" -e "Read" | sort
+    "log_tag": "Collected Bonsai commits to send to client",
+    "log_tag": "Converted HAVE Git commits to Bonsais",
+    "log_tag": "Converted WANT Git commits to Bonsais",
+    "log_tag": "Counted number of objects to be sent in packfile",
+    "log_tag": "Generated commits stream",
+    "log_tag": "Generated tags stream",
+    "log_tag": "Generated trees and blobs stream",
+    "msg": "Read",
+    "msg": "Read",
+    "msg": "Read",
+    "msg": "Read",
+    "msg": "Read",
+    "msg": "Read",
+    "msg": "Read",

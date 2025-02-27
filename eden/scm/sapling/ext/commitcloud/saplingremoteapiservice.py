@@ -10,9 +10,7 @@ import time
 from bindings import clientinfo as clientinfomod
 
 # Standard Library
-
 from sapling import error
-from sapling.pycompat import ensurestr
 
 from . import baseservice
 
@@ -263,7 +261,7 @@ class SaplingRemoteAPIService(baseservice.BaseService):
                 raise error.Abort(response["data"]["Err"]["message"])
 
         return baseservice.WorkspaceInfo(
-            name=ensurestr(response["name"]),
+            name=response["name"],
             archived=bool(response["archived"]),
             version=int(response["version"]),
         )
@@ -337,14 +335,14 @@ class SaplingRemoteAPIService(baseservice.BaseService):
     def cleanupworkspace(self, reponame, workspace):
         """Cleanup unnecessary remote bookmarks from the given workspace"""
         raise error.Abort(
-            "Unsupored oeration"
+            "Unsupported operation"
         )  # TODO(lmvasquezg): Implement this or fully deprecate
 
     def updatecheckoutlocations(
         self, reponame, workspace, hostname, commit, checkoutpath, sharedpath, unixname
     ):
         raise error.Abort(
-            "Unsupored oeration"
+            "Unsupported operation"
         )  # TODO(lmvasquezg): Implement this or fully deprecate
 
     def _castreferences(self, refs):
@@ -393,7 +391,7 @@ class SaplingRemoteAPIService(baseservice.BaseService):
             else:
                 raise error.Abort(response["data"]["Err"]["message"])
 
-        raise error.Abort("No data revceived from server")
+        raise error.Abort("No data received from server")
 
     def _map_legacy_flags(self, strings):
         mapping = {

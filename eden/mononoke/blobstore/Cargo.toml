@@ -15,10 +15,10 @@ path = "test/main.rs"
 abomonation = { version = "0.7", features = ["smallvec"] }
 abomonation_derive = "0.5"
 anyhow = "1.0.95"
-async-trait = "0.1.71"
+async-trait = "0.1.86"
 auto_impl = "1.2.1"
 bytes = { version = "1.9.0", features = ["serde"] }
-clap = { version = "4.5.20", features = ["derive", "env", "string", "unicode", "wrap_help"] }
+clap = { version = "4.5.30", features = ["derive", "env", "string", "unicode", "wrap_help"] }
 context = { version = "0.1.0", path = "../server/context" }
 either = "1.5"
 fbthrift = { version = "0.0.1+unstable", git = "https://github.com/facebook/fbthrift.git", branch = "main" }
@@ -41,4 +41,4 @@ memblob = { version = "0.1.0", path = "memblob" }
 mononoke_macros = { version = "0.1.0", path = "../mononoke_macros" }
 mononoke_types = { version = "0.1.0", path = "../mononoke_types" }
 sqlblob = { version = "0.1.0", path = "sqlblob" }
-tempfile = "3.8"
+tempfile = "3.15"

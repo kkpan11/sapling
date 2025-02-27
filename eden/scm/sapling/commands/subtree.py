@@ -43,7 +43,6 @@ from ..utils.subtreeutil import (
 )
 from .cmdtable import command
 
-
 MAX_SUBTREE_COPY_FILE_COUNT = 10_000
 MERGE_BASE_TIMEOUT_SECS = 120
 
@@ -132,6 +131,7 @@ def subtree_copy(ui, repo, *args, **opts):
     ]
     + commitopts
     + commitopts2
+    + cmdutil.messagefieldopts
     + mergetoolopts
     + dryrunopts
     + subtree_path_opts,
@@ -172,7 +172,9 @@ def subtree_merge(ui, repo, **opts):
     subtreeutil.validate_path_overlap(from_paths, to_paths)
     subtreeutil.validate_path_exist(ui, from_ctx, from_paths, abort_on_missing=True)
     subtreeutil.validate_path_exist(ui, ctx, to_paths, abort_on_missing=True)
+    subtreeutil.validate_path_depth(ui, from_paths + to_paths)
     subtreeutil.validate_source_commit(repo.ui, from_ctx, "merge")
+    subtreeutil.validate_file_count(repo, from_ctx, from_paths)
 
     merge_base_ctx = _subtree_merge_base(
         repo, ctx, to_paths[0], from_ctx, from_paths[0]
@@ -434,8 +436,22 @@ def _do_normal_copy(repo, from_ctx, to_ctx, from_paths, to_paths, opts):
         file_count += len(fileids)
         if file_count > limit:
             support = ui.config("ui", "supportcontact")
-            hint = _("contact %s for help") % support if support else ""
-            raise error.Abort(_("subtree copy includes too many files"), hint=hint)
+            help_hint = _("contact %s for help") % support if support else None
+            override_hint = _(
+                "use '--config subtree.copy-max-file-count=N' cautiously to override"
+            )
+            hint = (
+                _("%s or %s") % (help_hint, override_hint)
+                if help_hint
+                else override_hint
+            )
+            raise error.Abort(
+                _(
+                    "subtree copy includes too many files (%d), exceeding configured limit (%d)"
+                )
+                % (file_count, limit),
+                hint=hint,
+            )
         path_to_fileids[path] = fileids
 
     new_files = []

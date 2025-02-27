@@ -70,8 +70,10 @@ pub fn name_cs_node(
     ChangesetNode {
         cs_id,
         generation,
+        subtree_source_generation: generation,
         skip_tree_depth,
         p1_linear_depth,
+        subtree_source_depth: skip_tree_depth,
     }
 }
 
@@ -103,7 +105,9 @@ pub async fn from_dag(
             let parent_ids = parents.iter().map(|parent| added[parent].clone()).collect();
 
             let cs_id = name_cs_id(name);
-            graph_writer.add(ctx, cs_id, parent_ids).await?;
+            graph_writer
+                .add(ctx, cs_id, parent_ids, Default::default())
+                .await?;
             added.insert(name.clone(), cs_id);
             made_progress = true;
         }
@@ -752,6 +756,29 @@ pub async fn assert_ancestors_within_distance(
             .collect::<HashSet<_>>()
     );
 
+    Ok(())
+}
+
+pub async fn assert_find_boundary(
+    ctx: &CoreContext,
+    graph: &CommitGraph,
+    cs_ids: Vec<&str>,
+    expected_boundary: Vec<&str>,
+) -> Result<()> {
+    let cs_ids: Vec<_> = cs_ids.into_iter().map(name_cs_id).collect();
+    let boundary = graph
+        .find_boundary(ctx, cs_ids.clone())
+        .await?
+        .into_iter()
+        .map(cs_id_name)
+        .collect::<HashSet<_>>();
+
+    let expected_boundary: HashSet<_> = expected_boundary
+        .into_iter()
+        .map(|cs_name| cs_name.to_string())
+        .collect();
+
+    assert_eq!(boundary, expected_boundary);
     Ok(())
 }
 

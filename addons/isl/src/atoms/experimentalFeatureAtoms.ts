@@ -5,8 +5,8 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-import {configBackedAtom, localStorageBackedAtom} from '../jotaiUtils';
 import {atom} from 'jotai';
+import {configBackedAtom, localStorageBackedAtom} from '../jotaiUtils';
 
 // This config is intended to be controlled remotely. So it's read-only.
 const remoteExperimentalFeatures = configBackedAtom<boolean | null>(
@@ -20,6 +20,12 @@ const localExperimentalFeatures = localStorageBackedAtom<number>(
   'isl.experimental-features-local-override',
   0,
 );
+
+/**
+ * List of all currently enabled experimental features, as UI labels.
+ * UI setting to enable experimental features is only shown if this list is non-empty.
+ */
+export const currentExperimentalFeaturesList: Array<string> = [];
 
 /**
  * Whether experimental features are enabled.

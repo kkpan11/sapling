@@ -119,6 +119,7 @@ async fn derive_hg(
             repo.repo_blobstore_arc(),
             bcs.clone(),
             parent_manifests,
+            None,
         )
         .await?;
 
@@ -293,9 +294,7 @@ async fn async_main(app: MononokeApp) -> Result<(), Error> {
                 .iter()
                 .filter(|ty| match ty {
                     // If we discard submodules, we can't derive the git data types since they are inconsistent
-                    DerivableType::GitCommits
-                    | DerivableType::GitDeltaManifestsV2
-                    | DerivableType::GitTrees => false,
+                    DerivableType::GitCommits | DerivableType::GitDeltaManifestsV2 => false,
                     _ => true,
                 })
                 .cloned()

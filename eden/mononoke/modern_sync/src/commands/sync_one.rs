@@ -7,6 +7,7 @@
 
 use std::sync::Arc;
 
+use anyhow::bail;
 use anyhow::format_err;
 use anyhow::Result;
 use clap::Parser;
@@ -18,11 +19,11 @@ use mononoke_app::MononokeApp;
 use mononoke_types::ChangesetId;
 use repo_blobstore::RepoBlobstoreRef;
 use repo_identity::RepoIdentityRef;
+use tokio::sync::mpsc;
 use url::Url;
 
-use crate::sender::dummy::DummySender;
 use crate::sender::edenapi::EdenapiSender;
-use crate::sender::ModernSyncSender;
+use crate::sender::manager::SendManager;
 use crate::ModernSyncArgs;
 use crate::Repo;
 
@@ -31,8 +32,6 @@ use crate::Repo;
 pub struct CommandArgs {
     #[clap(long, help = "Changeset to sync")]
     cs_id: ChangesetId,
-    #[clap(long, help = "Print sent items without actually syncing")]
-    dry_run: bool,
 }
 
 pub async fn run(app: MononokeApp, args: CommandArgs) -> Result<()> {
@@ -67,9 +66,7 @@ pub async fn run(app: MononokeApp, args: CommandArgs) -> Result<()> {
         .new_context(app.logger().clone(), scuba)
         .clone_with_repo_name(&repo_name.clone());
 
-    let sender: Arc<dyn ModernSyncSender + Send + Sync> = if args.dry_run {
-        Arc::new(DummySender::new(logger.clone()))
-    } else {
+    let sender = {
         let url = if let Some(socket) = app_args.dest_socket {
             // Only for integration tests
             format!("{}:{}/edenapi/", &config.url, socket)
@@ -97,7 +94,29 @@ pub async fn run(app: MononokeApp, args: CommandArgs) -> Result<()> {
         )
     };
 
-    crate::sync::process_one_changeset(&args.cs_id, &ctx, repo, &logger, sender, false, "").await?;
+    let send_manager = SendManager::new(sender.clone(), logger.clone(), repo_name.clone());
+    let (cr_s, mut cr_r) = mpsc::channel::<Result<()>>(1);
+
+    crate::sync::process_one_changeset(
+        &args.cs_id,
+        &ctx,
+        repo,
+        &logger,
+        &send_manager,
+        false,
+        "",
+        Some(cr_s),
+    )
+    .await?;
+
+    let res = cr_r.recv().await;
+    match res {
+        Some(Err(e)) => {
+            bail!("Error while waiting for commit to be synced {:?}", e);
+        }
+        None => bail!("No commit synced"),
+        _ => (),
+    }
 
     Ok(())
 }

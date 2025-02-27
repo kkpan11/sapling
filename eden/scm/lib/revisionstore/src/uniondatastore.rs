@@ -7,12 +7,8 @@
 
 // Union data store
 use anyhow::Result;
-use minibytes::Bytes;
 
-use crate::datastore::ContentDataStore;
-use crate::datastore::ContentMetadata;
 use crate::datastore::HgIdDataStore;
-use crate::datastore::Metadata;
 use crate::datastore::RemoteDataStore;
 use crate::datastore::StoreResult;
 use crate::types::StoreKey;
@@ -25,17 +21,6 @@ impl<T: HgIdDataStore> HgIdDataStore for UnionHgIdDataStore<T> {
         for store in self {
             match store.get(key)? {
                 StoreResult::Found(data) => return Ok(StoreResult::Found(data)),
-                StoreResult::NotFound(next) => key = next,
-            }
-        }
-
-        Ok(StoreResult::NotFound(key))
-    }
-
-    fn get_meta(&self, mut key: StoreKey) -> Result<StoreResult<Metadata>> {
-        for store in self {
-            match store.get_meta(key)? {
-                StoreResult::Found(meta) => return Ok(StoreResult::Found(meta)),
                 StoreResult::NotFound(next) => key = next,
             }
         }
@@ -78,32 +63,6 @@ impl<T: RemoteDataStore> RemoteDataStore for UnionHgIdDataStore<T> {
     }
 }
 
-pub type UnionContentDataStore<T> = UnionStore<T>;
-
-impl<T: ContentDataStore> ContentDataStore for UnionContentDataStore<T> {
-    fn blob(&self, mut key: StoreKey) -> Result<StoreResult<Bytes>> {
-        for store in self {
-            match store.blob(key)? {
-                StoreResult::Found(blob) => return Ok(StoreResult::Found(blob)),
-                StoreResult::NotFound(next) => key = next,
-            }
-        }
-
-        Ok(StoreResult::NotFound(key))
-    }
-
-    fn metadata(&self, mut key: StoreKey) -> Result<StoreResult<ContentMetadata>> {
-        for store in self {
-            match store.metadata(key)? {
-                StoreResult::Found(meta) => return Ok(StoreResult::Found(meta)),
-                StoreResult::NotFound(next) => key = next,
-            }
-        }
-
-        Ok(StoreResult::NotFound(key))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use quickcheck::quickcheck;
@@ -127,10 +86,6 @@ mod tests {
             Ok(StoreResult::NotFound(key))
         }
 
-        fn get_meta(&self, key: StoreKey) -> Result<StoreResult<Metadata>> {
-            Ok(StoreResult::NotFound(key))
-        }
-
         fn refresh(&self) -> Result<()> {
             Ok(())
         }
@@ -144,10 +99,6 @@ mod tests {
 
     impl HgIdDataStore for BadHgIdDataStore {
         fn get(&self, _key: StoreKey) -> Result<StoreResult<Vec<u8>>> {
-            Err(BadHgIdDataStoreError.into())
-        }
-
-        fn get_meta(&self, _key: StoreKey) -> Result<StoreResult<Metadata>> {
             Err(BadHgIdDataStoreError.into())
         }
 
@@ -183,28 +134,6 @@ mod tests {
             let mut unionstore = UnionHgIdDataStore::new();
             unionstore.add(BadHgIdDataStore);
             unionstore.get(StoreKey::hgid(key)).is_err()
-        }
-
-        fn test_empty_unionstore_get_meta(key: Key) -> bool {
-            match UnionHgIdDataStore::<EmptyHgIdDataStore>::new().get_meta(StoreKey::hgid(key)) {
-                Ok(StoreResult::NotFound(_)) => true,
-                _ => false,
-            }
-        }
-
-        fn test_empty_datastore_get_meta(key: Key) -> bool {
-            let mut unionstore = UnionHgIdDataStore::new();
-            unionstore.add(EmptyHgIdDataStore);
-            match unionstore.get_meta(StoreKey::hgid(key)) {
-                Ok(StoreResult::NotFound(_)) => true,
-                _ => false,
-            }
-        }
-
-        fn test_bad_datastore_get_meta(key: Key) -> bool {
-            let mut unionstore = UnionHgIdDataStore::new();
-            unionstore.add(BadHgIdDataStore);
-            unionstore.get_meta(StoreKey::hgid(key)).is_err()
         }
 
         fn test_empty_unionstore_get_missing(keys: Vec<StoreKey>) -> bool {

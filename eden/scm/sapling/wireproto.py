@@ -30,7 +30,6 @@ from . import (
     peer,
     perftrace,
     pushkey as pushkeymod,
-    pycompat,
     replay,
     repository,
     streamclone,
@@ -38,7 +37,6 @@ from . import (
 )
 from .i18n import _
 from .node import bbin, bin, hex, nullid
-from .pycompat import decodeutf8, range
 
 urlerr = util.urlerr
 urlreq = util.urlreq
@@ -282,13 +280,13 @@ class wirepeer(repository.legacypeer):
     def lookup(self, key):
         self.requirecap("lookup", _("look up remote revision"))
         f = future()
-        yield {"key": encoding.fromlocal(key)}, f
+        yield {"key": key}, f
         d = f.value
         success, data = d[:-1].split(b" ", 1)
         if int(success):
             yield bbin(data)
         else:
-            self._abort(error.RepoError(pycompat.decodeutf8(data, errors="replace")))
+            self._abort(error.RepoError(data.decode(errors="replace")))
 
     @batchable
     def heads(self):
@@ -296,7 +294,7 @@ class wirepeer(repository.legacypeer):
         yield {}, f
         d = f.value
         try:
-            yield decodelist(decodeutf8(d[:-1]))
+            yield decodelist(d[:-1].decode())
         except ValueError:
             self._abort(error.ResponseError(_("unexpected response:"), d))
 
@@ -306,7 +304,7 @@ class wirepeer(repository.legacypeer):
         yield {"nodes": encodelist(nodes)}, f
         d = f.value
         try:
-            yield [bool(int(b)) for b in decodeutf8(d)]
+            yield [bool(int(b)) for b in d.decode()]
         except ValueError:
             self._abort(error.ResponseError(_("unexpected response:"), d))
 
@@ -318,7 +316,7 @@ class wirepeer(repository.legacypeer):
         try:
             branchmap = {}
             for branchpart in d.splitlines():
-                branchpart = pycompat.decodeutf8(branchpart)
+                branchpart = branchpart.decode()
                 branchname, branchheads = branchpart.split(" ", 1)
                 branchname = urlreq.unquote(branchname)
                 branchheads = decodelist(branchheads)
@@ -333,7 +331,7 @@ class wirepeer(repository.legacypeer):
             yield {}, None
         f = future()
         self.ui.debug('preparing listkeys for "%s"\n' % namespace)
-        yield {"namespace": encoding.fromlocal(namespace)}, f
+        yield {"namespace": namespace}, f
         d = f.value
         self.ui.debug('received listkey for "%s": %i bytes\n' % (namespace, len(d)))
         yield pushkeymod.decodekeys(d)
@@ -348,8 +346,8 @@ class wirepeer(repository.legacypeer):
         )
         yield (
             {
-                "namespace": encoding.fromlocal(namespace),
-                "patterns": encodelist([pycompat.encodeutf8(p) for p in patterns]),
+                "namespace": namespace,
+                "patterns": encodelist([p.encode() for p in patterns]),
             },
             f,
         )
@@ -365,14 +363,14 @@ class wirepeer(repository.legacypeer):
         self.ui.debug('preparing pushkey for "%s:%s"\n' % (namespace, key))
         yield (
             {
-                "namespace": encoding.fromlocal(namespace),
-                "key": encoding.fromlocal(key),
-                "old": encoding.fromlocal(old),
-                "new": encoding.fromlocal(new),
+                "namespace": namespace,
+                "key": key,
+                "old": old,
+                "new": new,
             },
             f,
         )
-        d = decodeutf8(f.value)
+        d = f.value.decode()
         d, output = d.split("\n", 1)
         try:
             d = bool(int(d))
@@ -577,9 +575,7 @@ class wirepeer(repository.legacypeer):
             opts[r"three"] = three
         if four is not None:
             opts[r"four"] = four
-        return pycompat.decodeutf8(
-            self._call("debugwireargs", one=one, two=two, **opts)
-        )
+        return self._call("debugwireargs", one=one, two=two, **opts).decode()
 
     def _call(self, cmd, **args):
         """execute <cmd> on the server
@@ -916,7 +912,7 @@ def batch(repo, proto, cmds, others):
         if isinstance(result, ooberror):
             return result
         if isinstance(result, str):
-            result = pycompat.encodeutf8(result)
+            result = result.encode()
         res.append(escapebytearg(result))
     return b";".join(res)
 
@@ -935,7 +931,7 @@ def branchmap(repo, proto):
     branchmap = repo.branchmap()
     heads = []
     for branch, nodes in branchmap.items():
-        branchname = urlreq.quote(encoding.fromlocal(branch))
+        branchname = urlreq.quote(branch)
         branchnodes = encodelist(nodes)
         heads.append("%s %s" % (branchname, branchnodes))
     return "\n".join(heads)
@@ -1123,27 +1119,26 @@ def hello(repo, proto):
 
     capabilities: space separated list of tokens
     """
-    return b"capabilities: %s\n" % (pycompat.encodeutf8(capabilities(repo, proto)))
+    return b"capabilities: %s\n" % capabilities(repo, proto).encode()
 
 
 @wireprotocommand("listkeys", "namespace")
 def listkeys(repo, proto, namespace):
-    d = repo.listkeys(encoding.tolocal(namespace)).items()
+    d = repo.listkeys(namespace).items()
     return pushkeymod.encodekeys(d)
 
 
 @wireprotocommand("listkeyspatterns", "namespace patterns")
 def listkeyspatterns(repo, proto, namespace, patterns):
-    patterns = [pycompat.decodeutf8(p) for p in decodelist(patterns)]
-    d = repo.listkeys(encoding.tolocal(namespace), patterns).items()
+    patterns = [p.decode() for p in decodelist(patterns)]
+    d = repo.listkeys(namespace, patterns).items()
     return pushkeymod.encodekeys(d)
 
 
 @wireprotocommand("lookup", "key")
 def lookup(repo, proto, key):
     try:
-        k = encoding.tolocal(key)
-        c = repo[k]
+        c = repo[key]
         r = c.hex()
         success = 1
     except Exception as inst:
@@ -1164,12 +1159,9 @@ def pushkey(repo, proto, namespace, key, old, new):
     if len(new) == 20 and util.escapestr(new) != new:
         # looks like it could be a binary node
         try:
-            new.decode("utf-8")
-            new = encoding.tolocal(new)  # but cleanly decodes as UTF-8
+            new = new.decode("utf-8")
         except UnicodeDecodeError:
             pass  # binary, leave unmodified
-    else:
-        new = encoding.tolocal(new)  # normal path
 
     if hasattr(proto, "restore"):
         proto.redirect()
@@ -1177,9 +1169,9 @@ def pushkey(repo, proto, namespace, key, old, new):
         try:
             r = (
                 repo.pushkey(
-                    encoding.tolocal(namespace),
-                    encoding.tolocal(key),
-                    encoding.tolocal(old),
+                    namespace,
+                    key,
+                    old,
                     new,
                 )
                 or False
@@ -1191,9 +1183,7 @@ def pushkey(repo, proto, namespace, key, old, new):
 
         return "%s\n%s" % (int(r), output)
 
-    r = repo.pushkey(
-        encoding.tolocal(namespace), encoding.tolocal(key), encoding.tolocal(old), new
-    )
+    r = repo.pushkey(namespace, key, old, new)
     return "%s\n" % int(r)
 
 
@@ -1357,9 +1347,9 @@ def unbundleimpl(repo, proto, heads, replaydata=None, respondlightly=False):
                 # We did not change it to minimise code change.
                 # This need to be moved to something proper.
                 # Feel free to do it.
-                util.stderr.write(pycompat.encodeutf8("abort: %s\n" % exc))
+                util.stderr.write(("abort: %s\n" % exc).encode())
                 if exc.hint is not None:
-                    util.stderr.write(pycompat.encodeutf8("(%s)\n" % exc.hint))
+                    util.stderr.write(("(%s)\n" % exc.hint).encode())
                 return pushres(0)
             except error.PushRaced:
                 return pusherr(str(exc))

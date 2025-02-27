@@ -6,6 +6,7 @@
  */
 
 use std::collections::BTreeMap;
+use std::collections::HashSet;
 
 use anyhow::bail;
 use anyhow::Context;
@@ -17,6 +18,7 @@ use quickcheck::Arbitrary;
 use quickcheck::Gen;
 use smallvec::SmallVec;
 use sorted_vector_map::SortedVectorMap;
+use thrift_convert::ThriftConvert;
 
 use crate::blob::Blob;
 use crate::blob::BlobstoreValue;
@@ -27,7 +29,9 @@ use crate::file_change::BasicFileChange;
 use crate::file_change::FileChange;
 use crate::hash::GitSha1;
 use crate::path;
+use crate::path::MPath;
 use crate::path::NonRootMPath;
+use crate::subtree_change::SubtreeChange;
 use crate::thrift;
 use crate::typed_hash::ChangesetId;
 use crate::typed_hash::ChangesetIdContext;
@@ -48,6 +52,7 @@ pub struct BonsaiChangesetMut {
     pub is_snapshot: bool,
     pub git_tree_hash: Option<GitSha1>,
     pub git_annotated_tag: Option<BonsaiAnnotatedTag>,
+    pub subtree_changes: SortedVectorMap<MPath, SubtreeChange>,
 }
 
 impl Default for BonsaiChangesetMut {
@@ -65,6 +70,7 @@ impl Default for BonsaiChangesetMut {
             is_snapshot: false,
             git_tree_hash: None,
             git_annotated_tag: None,
+            subtree_changes: SortedVectorMap::default(),
         }
     }
 }
@@ -110,6 +116,20 @@ impl BonsaiChangesetMut {
                 .map(BonsaiAnnotatedTag::from_thrift)
                 .transpose()
                 .context("Invalid annotated tag")?,
+            subtree_changes: tc
+                .subtree_changes
+                .map(|subtree_changes| {
+                    subtree_changes
+                        .into_iter()
+                        .map(|(path, change)| {
+                            let path = MPath::from_thrift(path)?;
+                            let change = SubtreeChange::from_thrift(change)?;
+                            Ok((path, change))
+                        })
+                        .collect::<Result<_>>()
+                })
+                .transpose()?
+                .unwrap_or_default(),
         })
     }
 
@@ -141,6 +161,13 @@ impl BonsaiChangesetMut {
             snapshot_state: self.is_snapshot.then_some(thrift::bonsai::SnapshotState {}),
             git_tree_hash: self.git_tree_hash.map(|hash| hash.into_thrift()),
             git_annotated_tag: self.git_annotated_tag.map(BonsaiAnnotatedTag::into_thrift),
+            subtree_changes: Some(
+                self.subtree_changes
+                    .into_iter()
+                    .map(|(path, change)| (path.into_thrift(), change.into_thrift()))
+                    .collect::<SortedVectorMap<_, _>>(),
+            )
+            .filter(|changes| !changes.is_empty()),
         }
     }
 
@@ -287,6 +314,16 @@ impl BonsaiChangeset {
         self.inner.parents.iter().cloned()
     }
 
+    /// Get the subtree sources for this changeset that are not also parents.
+    pub fn subtree_sources<'a>(&'a self) -> impl Iterator<Item = ChangesetId> + 'a {
+        let mut known = self.inner.parents.iter().cloned().collect::<HashSet<_>>();
+        self.inner
+            .subtree_changes
+            .iter()
+            .flat_map(|(_, change)| change.source())
+            .filter(move |source| known.insert(*source))
+    }
+
     #[inline]
     pub fn is_merge(&self) -> bool {
         self.inner.parents.len() > 1
@@ -377,6 +414,23 @@ impl BonsaiChangeset {
         self.inner.is_snapshot
     }
 
+    /// Get subtree changes for this changeset
+    pub fn subtree_changes(&self) -> &SortedVectorMap<MPath, SubtreeChange> {
+        &self.inner.subtree_changes
+    }
+
+    /// Return true if this changeset has any subtree changes
+    pub fn has_subtree_changes(&self) -> bool {
+        !self.subtree_changes().is_empty()
+    }
+
+    /// Returns true if this changeset has subtree changes that alter the manifest.
+    pub fn has_manifest_altering_subtree_changes(&self) -> bool {
+        self.subtree_changes()
+            .values()
+            .any(|change| change.alters_manifest())
+    }
+
     /// Allow mutating this instance of `BonsaiChangeset`.
     pub fn into_mut(self) -> BonsaiChangesetMut {
         self.inner
@@ -448,6 +502,7 @@ impl Arbitrary for BonsaiChangeset {
                 is_snapshot: bool::arbitrary(g),
                 git_tree_hash: None,
                 git_annotated_tag: None,
+                subtree_changes: SortedVectorMap::arbitrary(g),
             }
             .freeze()
             .expect("generated bonsai changeset must be valid")
@@ -461,26 +516,30 @@ impl Arbitrary for BonsaiChangeset {
             cs.file_changes.clone(),
             cs.hg_extra.clone(),
             cs.git_tree_hash.clone(),
+            cs.subtree_changes.clone(),
         )
             .shrink()
-            .map(move |(parents, file_changes, hg_extra, git_tree_hash)| {
-                BonsaiChangesetMut {
-                    parents,
-                    file_changes,
-                    author: cs.author.clone(),
-                    author_date: cs.author_date,
-                    committer: cs.committer.clone(),
-                    committer_date: cs.committer_date,
-                    message: cs.message.clone(),
-                    hg_extra,
-                    git_extra_headers: cs.git_extra_headers.clone(),
-                    is_snapshot: cs.is_snapshot,
-                    git_tree_hash,
-                    git_annotated_tag: cs.git_annotated_tag.clone(),
-                }
-                .freeze()
-                .expect("shrunken bonsai changeset must be valid")
-            });
+            .map(
+                move |(parents, file_changes, hg_extra, git_tree_hash, subtree_changes)| {
+                    BonsaiChangesetMut {
+                        parents,
+                        file_changes,
+                        author: cs.author.clone(),
+                        author_date: cs.author_date,
+                        committer: cs.committer.clone(),
+                        committer_date: cs.committer_date,
+                        message: cs.message.clone(),
+                        hg_extra,
+                        git_extra_headers: cs.git_extra_headers.clone(),
+                        is_snapshot: cs.is_snapshot,
+                        git_tree_hash,
+                        git_annotated_tag: cs.git_annotated_tag.clone(),
+                        subtree_changes,
+                    }
+                    .freeze()
+                    .expect("shrunken bonsai changeset must be valid")
+                },
+            );
         Box::new(iter)
     }
 }

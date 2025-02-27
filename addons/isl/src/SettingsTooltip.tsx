@@ -8,38 +8,6 @@
 import type {ThemeColor} from './theme';
 import type {PreferredSubmitCommand} from './types';
 
-import {rebaseOffWarmWarningEnabled} from './Commit';
-import {condenseObsoleteStacks} from './CommitTreeList';
-import {Column, Row} from './ComponentUtils';
-import {confirmShouldSubmitEnabledAtom} from './ConfirmSubmitStack';
-import {DropdownField, DropdownFields} from './DropdownFields';
-import {useShowKeyboardShortcutsHelp} from './ISLShortcuts';
-import {Internal} from './Internal';
-import {Link} from './Link';
-import {RestackBehaviorSetting} from './RestackBehavior';
-import {Setting} from './Setting';
-import {hasExperimentalFeatures} from './atoms/experimentalFeatureAtoms';
-import {codeReviewProvider} from './codeReview/CodeReviewInfo';
-import {showDiffNumberConfig} from './codeReview/DiffBadge';
-import {SubmitAsDraftCheckbox} from './codeReview/DraftCheckbox';
-import {
-  branchPRsSupported,
-  experimentalBranchPRsEnabled,
-  overrideDisabledSubmitModes,
-} from './codeReview/github/branchPrState';
-import GatedComponent from './components/GatedComponent';
-import {debugToolsEnabledState} from './debug/DebugToolsState';
-import {externalMergeToolAtom} from './externalMergeTool';
-import {t, T} from './i18n';
-import {configBackedAtom, readAtom} from './jotaiUtils';
-import {AutoResolveSettingCheckbox} from './mergeConflicts/state';
-import {SetConfigOperation} from './operations/SetConfigOperation';
-import {useRunOperation} from './operationsState';
-import platform from './platform';
-import {irrelevantCwdDeemphasisEnabled} from './repositoryData';
-import {renderCompactAtom, useZoomShortcut, zoomUISettingAtom} from './responsive';
-import {repositoryInfo} from './serverAPIState';
-import {useThemeShortcut, themeState} from './theme';
 import {Button} from 'isl-components/Button';
 import {Checkbox} from 'isl-components/Checkbox';
 import {Dropdown} from 'isl-components/Dropdown';
@@ -50,9 +18,43 @@ import {Subtle} from 'isl-components/Subtle';
 import {Tooltip} from 'isl-components/Tooltip';
 import {useAtom, useAtomValue} from 'jotai';
 import {Suspense} from 'react';
-import {tryJsonParse, nullthrows} from 'shared/utils';
+import {nullthrows, tryJsonParse} from 'shared/utils';
+import {rebaseOffWarmWarningEnabled} from './Commit';
+import {condenseObsoleteStacks} from './CommitTreeList';
+import {Column, Row} from './ComponentUtils';
+import {confirmShouldSubmitEnabledAtom} from './ConfirmSubmitStack';
+import {DropdownField, DropdownFields} from './DropdownFields';
+import {useShowKeyboardShortcutsHelp} from './ISLShortcuts';
+import {Link} from './Link';
+import {RestackBehaviorSetting} from './RestackBehavior';
+import {Setting} from './Setting';
+import {
+  currentExperimentalFeaturesList,
+  hasExperimentalFeatures,
+} from './atoms/experimentalFeatureAtoms';
+import {codeReviewProvider} from './codeReview/CodeReviewInfo';
+import {showDiffNumberConfig} from './codeReview/DiffBadge';
+import {SubmitAsDraftCheckbox} from './codeReview/DraftCheckbox';
+import {
+  branchPRsSupported,
+  experimentalBranchPRsEnabled,
+  overrideDisabledSubmitModes,
+} from './codeReview/github/branchPrState';
+import {debugToolsEnabledState} from './debug/DebugToolsState';
+import {externalMergeToolAtom} from './externalMergeTool';
+import {t, T} from './i18n';
+import {configBackedAtom, readAtom} from './jotaiUtils';
+import {AutoResolveSettingCheckbox} from './mergeConflicts/state';
+import {SetConfigOperation} from './operations/SetConfigOperation';
+import {useRunOperation} from './operationsState';
+import platform from './platform';
+import {irrelevantCwdDeemphasisEnabled} from './repositoryData';
+import {renderCompactAtom, useZoomShortcut, zoomUISettingAtom} from './responsive';
+import {mainCommandName, repositoryInfo} from './serverAPIState';
+import {themeState, useThemeShortcut} from './theme';
 
 import './SettingsTooltip.css';
+import {enableSaplingDebugFlag, enableSaplingVerboseFlag} from './atoms/debugToolAtoms';
 
 export function SettingsGearButton() {
   useThemeShortcut();
@@ -142,9 +144,9 @@ function SettingsDropdown({
         description={<T>Locale for translations used in the UI. Currently only en supported.</T>}>
         <Dropdown value="en" options=['en'] />
       </Setting> */}
-      {repoInfo?.type !== 'success' ? (
+      {repoInfo == null ? (
         <Icon icon="loading" />
-      ) : repoInfo?.codeReviewSystem.type === 'github' ? (
+      ) : repoInfo.codeReviewSystem.type === 'github' ? (
         <Setting
           title={<T>Preferred Code Review Submit Method</T>}
           description={
@@ -455,11 +457,12 @@ function ZoomUISetting() {
 function DebugToolsField() {
   const [isDebug, setIsDebug] = useAtom(debugToolsEnabledState);
   const [overrideDisabledSubmit, setOverrideDisabledSubmit] = useAtom(overrideDisabledSubmitModes);
+  const [debugFlag, setDebugFlag] = useAtom(enableSaplingDebugFlag);
+  const [verboseFlag, setVerboseFlag] = useAtom(enableSaplingVerboseFlag);
   const provider = useAtomValue(codeReviewProvider);
+  const commandName = useAtomValue(mainCommandName);
 
   const [branchPrsEnabled, setBranchPrsEnabled] = useAtom(experimentalBranchPRsEnabled);
-  const [experimentalFeaturesEnabled, setExperimentalFeaturesEnabled] =
-    useAtom(hasExperimentalFeatures);
 
   return (
     <DropdownField title={t('Debug Tools & Experimental')}>
@@ -471,13 +474,7 @@ function DebugToolsField() {
           }}>
           <T>Enable Debug Tools</T>
         </Checkbox>
-        <Checkbox
-          checked={experimentalFeaturesEnabled}
-          onChange={checked => {
-            setExperimentalFeaturesEnabled(checked);
-          }}>
-          <T>Enable Experimental Features</T>
-        </Checkbox>
+        <ExperimentalFeaturesCheckbox />
         {provider?.submitDisabledReason?.() != null && (
           <Checkbox
             checked={overrideDisabledSubmit}
@@ -495,7 +492,51 @@ function DebugToolsField() {
             <T>Enable Experimental Branching PRs for GitHub</T>
           </Checkbox>
         )}
+        <Row>
+          <T
+            replace={{
+              $sl: <code>{commandName}</code>,
+              $verbose: (
+                <Checkbox checked={verboseFlag} onChange={setVerboseFlag}>
+                  <code>--verbose</code>
+                </Checkbox>
+              ),
+              $debug: (
+                <Checkbox checked={debugFlag} onChange={setDebugFlag}>
+                  <code>--debug</code>
+                </Checkbox>
+              ),
+            }}>
+            Pass extra flags to $sl: $verbose $debug
+          </T>
+        </Row>
       </Column>
     </DropdownField>
+  );
+}
+
+function ExperimentalFeaturesCheckbox() {
+  const [experimentalFeaturesEnabled, setExperimentalFeaturesEnabled] =
+    useAtom(hasExperimentalFeatures);
+
+  if (currentExperimentalFeaturesList.length === 0) {
+    return null;
+  }
+
+  return (
+    <Tooltip
+      title={t(
+        `Enable experimental features that are still being developed and may not work as expected.
+
+Current experimental features: ${currentExperimentalFeaturesList.join(', ')}`,
+      )}>
+      <Checkbox
+        checked={experimentalFeaturesEnabled}
+        onChange={checked => {
+          setExperimentalFeaturesEnabled(checked);
+        }}>
+        <T>Enable Experimental Features</T>
+      </Checkbox>
+    </Tooltip>
   );
 }

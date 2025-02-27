@@ -98,6 +98,7 @@ use mononoke_types::DerivableType;
 use mononoke_types::FileChange;
 use mononoke_types::FileType;
 use mononoke_types::GitLfs;
+use mononoke_types::MPath;
 use mononoke_types::Timestamp;
 use pushrebase_hook::PushrebaseCommitHook;
 use pushrebase_hook::PushrebaseHook;
@@ -178,12 +179,12 @@ pub enum PushrebaseError {
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct PushrebaseConflict {
-    pub left: NonRootMPath,
-    pub right: NonRootMPath,
+    pub left: MPath,
+    pub right: MPath,
 }
 
 impl PushrebaseConflict {
-    fn new(left: NonRootMPath, right: NonRootMPath) -> Self {
+    fn new(left: MPath, right: MPath) -> Self {
         PushrebaseConflict { left, right }
     }
 }
@@ -264,11 +265,13 @@ pub async fn do_pushrebase_bonsai(
 
     let root = find_closest_root(ctx, repo, config, onto_bookmark, &roots).await?;
 
-    let (client_cf, client_bcs) = try_join(
+    let (mut client_cf, client_bcs) = try_join(
         find_changed_files(ctx, repo, root, head),
         fetch_bonsai_range_ancestor_not_included(ctx, repo, root, head),
     )
     .await?;
+
+    client_cf.extend(find_subtree_changes(&client_bcs)?);
 
     // Normally filenodes (and all other types of derived data) are generated on the first
     // read. However if too many commits are pushed (e.g. when a new repo is merged-in) then
@@ -332,7 +335,7 @@ async fn rebase_in_loop(
     onto_bookmark: &BookmarkKey,
     head: ChangesetId,
     root: ChangesetId,
-    client_cf: Vec<NonRootMPath>,
+    client_cf: Vec<MPath>,
     client_bcs: &[BonsaiChangeset],
     prepushrebase_hooks: &[Box<dyn PushrebaseHook>],
 ) -> Result<PushrebaseOutcome, PushrebaseError> {
@@ -378,7 +381,7 @@ async fn rebase_in_loop(
             }
         }
 
-        let server_cf = find_changed_files(
+        let mut server_cf = find_changed_files(
             ctx,
             repo,
             latest_rebase_attempt,
@@ -386,7 +389,8 @@ async fn rebase_in_loop(
         )
         .await?;
 
-        // TODO: Avoid this clone
+        server_cf.extend(find_subtree_changes(&server_bcs)?);
+
         intersect_changed_files(server_cf, client_cf.clone())?;
 
         let rebase_outcome = do_rebase(
@@ -671,10 +675,10 @@ async fn find_changed_files_between_manifests(
     repo: &impl Repo,
     ancestor: ChangesetId,
     descendant: ChangesetId,
-) -> Result<Vec<NonRootMPath>, PushrebaseError> {
+) -> Result<Vec<MPath>, PushrebaseError> {
     let paths = find_bonsai_diff(ctx, repo, ancestor, descendant)
         .await?
-        .map_ok(|diff| diff.into_path())
+        .map_ok(|diff| MPath::from(diff.into_path()))
         .try_collect()
         .await?;
 
@@ -737,7 +741,7 @@ async fn find_changed_files(
     repo: &impl Repo,
     ancestor: ChangesetId,
     descendant: ChangesetId,
-) -> Result<Vec<NonRootMPath>, PushrebaseError> {
+) -> Result<Vec<MPath>, PushrebaseError> {
     let id_to_bcs = repo
         .commit_graph()
         .range_stream(ctx, ancestor, descendant)
@@ -803,25 +807,46 @@ async fn find_changed_files(
     Ok(file_changes_union)
 }
 
-fn extract_conflict_files_from_bonsai_changeset(bcs: BonsaiChangeset) -> Vec<NonRootMPath> {
+fn extract_conflict_files_from_bonsai_changeset(bcs: BonsaiChangeset) -> Vec<MPath> {
     bcs.file_changes()
         .flat_map(|(path, file_change)| {
             let mut v = vec![];
             if let Some((copy_from_path, _)) = file_change.copy_from() {
-                v.push(copy_from_path.clone());
+                v.push(MPath::from(copy_from_path.clone()));
             }
-            v.push(path.clone());
+            v.push(MPath::from(path.clone()));
             v.into_iter()
         })
-        .collect::<Vec<NonRootMPath>>()
+        .collect::<Vec<MPath>>()
+}
+
+fn find_subtree_changes(changesets: &[BonsaiChangeset]) -> Result<Vec<MPath>, PushrebaseError> {
+    let cs_ids = changesets
+        .iter()
+        .map(|bcs| bcs.get_changeset_id())
+        .collect::<HashSet<_>>();
+
+    let mut paths = Vec::new();
+    for bcs in changesets {
+        for (path, change) in bcs.subtree_changes() {
+            paths.push(path.clone());
+            if let Some((from_csid, from_path)) = change.change_source() {
+                if cs_ids.contains(&from_csid) {
+                    // This change is copying from the rebase set, so its
+                    // origin will be updated as part of the pushrebase.
+                    // This means we must make the source has not changed
+                    // since the root.
+                    paths.push(from_path.clone());
+                }
+            }
+        }
+    }
+    Ok(paths)
 }
 
 /// `left` and `right` are considerered to be conflit free, if none of the element from `left`
 /// is prefix of element from `right`, and vice versa.
-fn intersect_changed_files(
-    left: Vec<NonRootMPath>,
-    right: Vec<NonRootMPath>,
-) -> Result<(), PushrebaseError> {
+fn intersect_changed_files(left: Vec<MPath>, right: Vec<MPath>) -> Result<(), PushrebaseError> {
     let mut left = {
         let mut left = left;
         left.sort_unstable();
@@ -1002,6 +1027,17 @@ async fn rebase_changeset(
             FileChange::Deletion
             | FileChange::UntrackedDeletion
             | FileChange::UntrackedChange(_) => {}
+        }
+    }
+
+    // Subtree changes might be sourced from the rebase set, in which case they must be updated.
+    for (_path, change) in bcs.subtree_changes.iter_mut() {
+        if let Some((from_csid, _from_path)) = change.change_source() {
+            if rebased_set.contains(&from_csid) {
+                if let Some((new_from_csid, _)) = remapping.get(&from_csid) {
+                    change.replace_source_changeset_id(*new_from_csid);
+                }
+            }
         }
     }
 
@@ -1395,8 +1431,8 @@ mod tests {
         Ok(())
     }
 
-    fn make_paths(paths: &[&str]) -> Vec<NonRootMPath> {
-        let paths: Result<_, _> = paths.iter().map(NonRootMPath::new).collect();
+    fn make_paths(paths: &[&str]) -> Vec<MPath> {
+        let paths: Result<_, _> = paths.iter().map(MPath::new).collect();
         paths.unwrap()
     }
 
@@ -1869,8 +1905,8 @@ mod tests {
                     assert_eq!(
                         conflicts,
                         vec![PushrebaseConflict {
-                            left: NonRootMPath::new("9")?,
-                            right: NonRootMPath::new("9/file")?,
+                            left: MPath::new("9")?,
+                            right: MPath::new("9/file")?,
                         },],
                     );
                 }
@@ -2293,16 +2329,16 @@ mod tests {
                 *conflicts,
                 [
                     PushrebaseConflict {
-                        left: NonRootMPath::new("a/b/d")?,
-                        right: NonRootMPath::new("a/b/d/f")?,
+                        left: MPath::new("a/b/d")?,
+                        right: MPath::new("a/b/d/f")?,
                     },
                     PushrebaseConflict {
-                        left: NonRootMPath::new("c")?,
-                        right: NonRootMPath::new("c")?,
+                        left: MPath::new("c")?,
+                        right: MPath::new("c")?,
                     },
                     PushrebaseConflict {
-                        left: NonRootMPath::new("e/c")?,
-                        right: NonRootMPath::new("e")?,
+                        left: MPath::new("e/c")?,
+                        right: MPath::new("e")?,
                     },
                 ]
             ),

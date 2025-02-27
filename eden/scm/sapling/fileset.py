@@ -15,7 +15,7 @@ from __future__ import absolute_import
 import re
 from typing import List, Optional, Tuple
 
-from . import error, merge, parser, pycompat, registrar, scmutil, util, winutil
+from . import error, merge, parser, registrar, scmutil, util, winutil
 from .i18n import _
 
 
@@ -44,7 +44,7 @@ globchars = ".*{}[]?/\\_"
 
 def tokenize(program):
     pos, l = 0, len(program)
-    program = pycompat.bytestr(program)
+    program = str(program)
     while pos < l:
         c = program[pos]
         if c.isspace():  # skip inter-token whitespace
@@ -343,7 +343,7 @@ def grep(mctx, x):
     """File contains the given regular expression."""
     try:
         # i18n: "grep" is a keyword
-        r = re.compile(pycompat.encodeutf8(getstring(x, _("grep requires a pattern"))))
+        r = re.compile(getstring(x, _("grep requires a pattern")).encode())
     except re.error as e:
         raise error.ParseError(_("invalid match pattern: %s") % e)
     return [f for f in mctx.existing() if r.search(mctx.ctx[f].data())]

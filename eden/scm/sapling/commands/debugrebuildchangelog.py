@@ -13,17 +13,7 @@ from typing import Optional, Sized
 
 import bindings
 
-from .. import (
-    bookmarks as bookmod,
-    changelog2,
-    clone,
-    extensions,
-    hg,
-    progress,
-    pycompat,
-    util,
-    visibility,
-)
+from .. import bookmarks as bookmod, changelog2, clone, extensions, hg, progress, util
 from ..i18n import _
 from ..node import bin, hex, nullid, short
 from ..revlog import hash as revloghash
@@ -273,7 +263,7 @@ def _clonetotmp(repo, tmprepopath: str):
         with tmprepo.localvfs.open(ident.configrepofile(), "a") as f:
             f.write(
                 b"\n%%include %s\n"
-                % pycompat.encodeutf8(repo.localvfs.join(ident.configrepofile()))
+                % repo.localvfs.join(ident.configrepofile()).encode()
             )
     tmprepo = hg.repository(repo.ui, path=tmprepopath)
     clone.revlogclone("default", tmprepo)

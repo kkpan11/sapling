@@ -5,15 +5,16 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-import type {Watchman} from '../watchman';
 import type {Client} from 'fb-watchman';
 import type {RepoInfo} from 'isl/src/types';
+import type {Watchman} from '../watchman';
 
+import fs from 'node:fs';
+import {TypedEventEmitter} from 'shared/TypedEventEmitter';
+import {mockLogger} from 'shared/testUtils';
 import {PageFocusTracker} from '../PageFocusTracker';
 import {WatchForChanges} from '../WatchForChanges';
 import {ONE_MINUTE_MS} from '../constants';
-import {TypedEventEmitter} from 'shared/TypedEventEmitter';
-import {mockLogger} from 'shared/testUtils';
 
 jest.mock('fb-watchman', () => {
   // make a fake watchman object which returns () => undefined for every property
@@ -47,6 +48,11 @@ describe('WatchForChanges', () => {
   beforeEach(() => {
     jest.useFakeTimers();
     onChange.mockClear();
+
+    jest.spyOn(fs.promises, 'realpath').mockImplementation((path, _opts) => {
+      return Promise.resolve(path as string);
+    });
+
     focusTracker = new PageFocusTracker();
     watch = new WatchForChanges(mockInfo, mockLogger, focusTracker, onChange);
     // pretend watchman is not running for most tests
@@ -208,6 +214,7 @@ describe('WatchForChanges', () => {
         }),
       unwatch: jest.fn(),
     } as unknown as Watchman;
+
     watch = new WatchForChanges(mockInfo, mockLogger, focusTracker, onChange, mockWatchman);
     watch.setupWatchmanSubscriptions();
     expect(onChange).toHaveBeenCalledTimes(1);

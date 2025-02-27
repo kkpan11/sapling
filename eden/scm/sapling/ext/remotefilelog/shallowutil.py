@@ -12,15 +12,13 @@ import struct
 import typing
 from typing import Dict, IO, Mapping
 
-from sapling import error, filelog, pycompat, util
+from sapling import error, filelog, util
 from sapling.i18n import _
 from sapling.node import hex
-from sapling.pycompat import decodeutf8, encodeutf8
 
 from . import constants
 
-
-if not pycompat.iswindows:
+if not util.iswindows:
     import grp
 
 
@@ -131,7 +129,7 @@ def _parsepackmeta(metabuf: bytes) -> "Dict[str, bytes]":
     offset = 0
     buflen = len(metabuf)
     while buflen - offset >= 3:
-        key = pycompat.decodeutf8(struct.unpack_from("!c", metabuf, offset)[0])
+        key = struct.unpack_from("!c", metabuf, offset)[0].decode()
         offset += 1
         metalen = struct.unpack_from("!H", metabuf, offset)[0]
         offset += 2
@@ -161,7 +159,7 @@ def _buildpackmeta(metadict: "Mapping[str, bytes]") -> bytes:
             raise error.ProgrammingError("packmeta: illegal key: %s" % k)
         if len(v) > 0xFFFE:
             raise ValueError("metadata value is too long: 0x%x > 0xfffe" % len(v))
-        metabuf += encodeutf8(k)
+        metabuf += k.encode()
         metabuf += struct.pack("!H", len(v))
         metabuf += v
     # len(metabuf) is guaranteed representable in 4 bytes, because there are
@@ -301,7 +299,7 @@ def readunpack(stream: "IO[bytes]", fmt: str) -> tuple:
 def readpath(stream: "IO[bytes]") -> str:
     rawlen = readexactly(stream, constants.FILENAMESIZE)
     pathlen = struct.unpack(constants.FILENAMESTRUCT, rawlen)[0]
-    return decodeutf8(readexactly(stream, pathlen))
+    return readexactly(stream, pathlen).decode()
 
 
 def getgid(groupname):

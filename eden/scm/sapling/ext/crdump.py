@@ -13,12 +13,11 @@ import shutil
 import tempfile
 from os import path
 
-from sapling import encoding, error, extensions, registrar, scmutil
+from sapling import error, extensions, registrar, scmutil
 from sapling.i18n import _
 from sapling.node import hex
 
 from . import commitcloud
-
 
 DIFFERENTIAL_REGEX = re.compile(
     "Differential Revision: http.+?/"  # Line start, URL
@@ -138,11 +137,11 @@ def crdump(ui, repo, *revs, **opts):
             rdata = {
                 "node": hex(ctx.node()),
                 "date": list(map(int, ctx.date())),
-                "desc": encoding.fromlocal(ctx.description()),
+                "desc": ctx.description(),
                 "files": ctx.files(),
                 "p1": {"node": ctx.p1().hex()},
-                "user": encoding.fromlocal(ctx.user()),
-                "bookmarks": list(map(encoding.fromlocal, ctx.bookmarks())),
+                "user": ctx.user(),
+                "bookmarks": ctx.bookmarks(),
                 "commit_cloud": False if ctx.rev() in notbackedup else True,
                 "manifest_node": hex(ctx.manifestnode()),
             }

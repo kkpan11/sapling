@@ -17,9 +17,8 @@ from typing import Dict, List, Optional, Pattern, Union
 
 import bindings
 
-from . import encoding, pycompat, util
+from . import encoding, util
 from .i18n import _
-from .pycompat import decodeutf8, encodeutf8
 
 curses = util.import_curses()
 
@@ -125,6 +124,7 @@ _defaultstyles = {
     "shelve.newest": "green bold",
     "shelve.name": "blue bold",
     "status.added": "green bold",
+    "ui.hint": "yellow",
     "ui.metrics": "#777:color242:dim",
     "ui.prefix.component": "cyan",
     "ui.prefix.error": "brightred:red",
@@ -278,10 +278,10 @@ def _mergeeffects(
     parts = []
     if usebytes:
         assert isinstance(text, bytes)
-        for t in text.split(encodeutf8(stop)):
+        for t in text.split(stop.encode()):
             if not t:
                 continue
-            parts.extend([encodeutf8(start), t, encodeutf8(stop)])
+            parts.extend([start.encode(), t, stop.encode()])
         return b"".join(parts)
     else:
         assert isinstance(text, str)
@@ -299,9 +299,9 @@ def _render_effects(ui, text, effects: List[str], usebytes: bool = False):
     activeeffects = _activeeffects(ui)
     # pyre-fixme[16]: `List` has no attribute `split`.
     effects = ["none"] + [e for effect in effects.split() for e in effect.split("+")]
-    start = [pycompat.bytestr(activeeffects[e]) for e in effects]
+    start = [str(activeeffects[e]) for e in effects]
     start = "\033[" + ";".join(start) + "m"
-    stop = "\033[" + pycompat.bytestr(activeeffects["none"]) + "m"
+    stop = "\033[" + str(activeeffects["none"]) + "m"
     return _mergeeffects(text, start, stop, usebytes=usebytes)
 
 
@@ -320,12 +320,12 @@ def colorlabel(ui, msg, label, usebytes: bool = False) -> Union[bytes, str]:
         if label and msg:
             if msg[-1] == "\n":
                 if usebytes:
-                    msg = b"[%s|%s]\n" % (encodeutf8(label), msg[:-1])
+                    msg = b"[%s|%s]\n" % (label.encode(), msg[:-1])
                 else:
                     msg = "[%s|%s]\n" % (label, msg[:-1])
             else:
                 if usebytes:
-                    msg = b"[%s|%s]" % (encodeutf8(label), msg)
+                    msg = b"[%s|%s]" % (label.encode(), msg)
                 else:
                     msg = "[%s|%s]" % (label, msg)
     elif ui._colormode is not None:
@@ -336,9 +336,9 @@ def colorlabel(ui, msg, label, usebytes: bool = False) -> Union[bytes, str]:
             style = " ".join(ui._styles.get(l, l) for l in label.split())
             if not usebytes:
                 # Roundtrip strings to clear out non-utf8 characters.
-                msg = encodeutf8(msg, errors="backslashreplace")
+                msg = msg.encode(errors="backslashreplace")
 
-            msg = decodeutf8(msg, errors="backslashreplace")
+            msg = msg.decode(errors="backslashreplace")
             styled = ui._styler.renderbytes(style, msg)
             if not usebytes:
                 styled = styled.decode()
@@ -421,7 +421,7 @@ def supportedcolors(ui):
         realcolors = 16777216
     # XXX: The gitbash pager doesn't support more than 8 colors, remove once
     # we switched over to our embedded less pager.
-    elif pycompat.iswindows and ui.pageractive:
+    elif util.iswindows and ui.pageractive:
         realcolors = 8
     # Otherwise, pretend to support 256 colors.
     else:

@@ -86,11 +86,23 @@ pub struct GitMethodInfo {
 
 impl GitMethodInfo {
     pub fn variants_to_string(&self) -> String {
-        self.variants
+        let mut variants = self
+            .variants
             .iter()
             .map(|v| v.to_string())
-            .collect::<Vec<String>>()
-            .join(",")
+            .collect::<Vec<String>>();
+        variants.sort();
+        variants.join(",")
+    }
+
+    pub fn variants_to_string_vector(&self) -> Vec<String> {
+        let mut variants = self
+            .variants
+            .iter()
+            .map(|v| v.to_string())
+            .collect::<Vec<String>>();
+        variants.sort();
+        variants
     }
 
     pub fn standard(repo: String, method: GitMethod) -> Self {
@@ -160,6 +172,48 @@ impl Display for PushValidationErrors {
         for (ref_name, error) in &self.ref_with_errors {
             write!(f, "{} => {}\n", ref_name, error)?;
         }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use anyhow::Result;
+    use mononoke_macros::mononoke;
+
+    use super::*;
+
+    #[mononoke::test]
+    fn variants_to_string() -> Result<()> {
+        let info = GitMethodInfo {
+            repo: "repo".to_string(),
+            method: GitMethod::Push,
+            variants: vec![],
+        };
+        assert_eq!(info.variants_to_string(), "");
+
+        let info = GitMethodInfo {
+            repo: "repo".to_string(),
+            method: GitMethod::Push,
+            variants: vec![GitMethodVariant::Filter],
+        };
+        assert_eq!(info.variants_to_string(), "filter");
+
+        let info = GitMethodInfo {
+            repo: "repo".to_string(),
+            method: GitMethod::Push,
+            variants: vec![GitMethodVariant::Filter, GitMethodVariant::Shallow],
+        };
+        assert_eq!(info.variants_to_string(), "filter,shallow");
+
+        // Same but in reverse order
+        let info = GitMethodInfo {
+            repo: "repo".to_string(),
+            method: GitMethod::Push,
+            variants: vec![GitMethodVariant::Shallow, GitMethodVariant::Filter],
+        };
+        assert_eq!(info.variants_to_string(), "filter,shallow");
+
         Ok(())
     }
 }

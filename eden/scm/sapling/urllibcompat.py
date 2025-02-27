@@ -11,8 +11,6 @@
 # GNU General Public License version 2 or any later version.
 from __future__ import absolute_import
 
-from . import pycompat
-
 
 class _pycompatstub:
     def __init__(self):
@@ -106,7 +104,7 @@ unquote = urllib.parse.unquote
 # urllib.parse.urlencode() returns str. We use this function to make
 # sure we return bytes.
 def urlencode(query, doseq: bool = False):
-    s = pycompat.encodeutf8(urllib.parse.urlencode(query, doseq=doseq))
+    s = urllib.parse.urlencode(query, doseq=doseq).encode()
     return s
 
 

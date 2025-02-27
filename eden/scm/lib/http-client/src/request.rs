@@ -34,6 +34,8 @@ use parking_lot::RwLock;
 use serde::Serialize;
 use url::Url;
 
+use crate::claimer::RequestClaim;
+use crate::claimer::RequestClaimer;
 use crate::errors::HttpClientError;
 use crate::event_listeners::RequestCreationEventListeners;
 use crate::event_listeners::RequestEventListeners;
@@ -57,7 +59,7 @@ pub enum Method {
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct MinTransferSpeed {
     pub min_bytes_per_second: u32,
-    pub grace_period: Duration,
+    pub window: Duration,
 }
 
 impl fmt::Display for Method {
@@ -172,11 +174,13 @@ pub struct RequestId(usize);
 #[derive(Clone, Debug)]
 pub struct Request {
     ctx: RequestContext,
+    claimer: RequestClaimer,
     headers: HashMap<String, String>,
     cert: Option<PathBuf>,
     key: Option<PathBuf>,
     cainfo: Option<PathBuf>,
-    timeout: Option<Duration>,
+    connect_timeout: Option<Duration>,
+    overall_timeout: Option<Duration>,
     http_version: HttpVersion,
     accept_encoding: Vec<Encoding>,
     min_transfer_speed: Option<MinTransferSpeed>,
@@ -185,6 +189,7 @@ pub struct Request {
     verbose: bool,
     convert_cert: bool,
     auth_proxy_socket_path: Option<String>,
+    limit_response_buffering: bool,
 }
 
 static REQUEST_CREATION_LISTENERS: Lazy<RwLock<RequestCreationEventListeners>> =
@@ -254,10 +259,11 @@ impl RequestContext {
 }
 
 impl Request {
-    pub fn new(url: Url, method: Method) -> Self {
+    pub(crate) fn new(url: Url, method: Method, claimer: RequestClaimer) -> Self {
         let ctx = RequestContext::new(url, method);
         Self {
             ctx,
+            claimer,
             // Always set Expect so we can disable curl automatically expecting "100-continue".
             // That would require two response reads, which breaks the http_client model.
             headers: hashmap! {
@@ -266,7 +272,8 @@ impl Request {
             cert: None,
             key: None,
             cainfo: None,
-            timeout: None,
+            connect_timeout: None,
+            overall_timeout: None,
             http_version: DEFAULT_HTTP_VERSION.clone(),
             accept_encoding: Vec::new(),
             min_transfer_speed: None,
@@ -275,6 +282,7 @@ impl Request {
             verbose: false,
             convert_cert: false,
             auth_proxy_socket_path: None,
+            limit_response_buffering: false,
         }
     }
 
@@ -297,26 +305,6 @@ impl Request {
     /// Get a mutable reference to this request's context.
     pub fn ctx_mut(&mut self) -> &mut RequestContext {
         &mut self.ctx
-    }
-
-    /// Create a GET request.
-    pub(crate) fn get(url: Url) -> Self {
-        Self::new(url, Method::Get)
-    }
-
-    /// Create a HEAD request.
-    pub(crate) fn head(url: Url) -> Self {
-        Self::new(url, Method::Head)
-    }
-
-    /// Create a POST request.
-    pub(crate) fn post(url: Url) -> Self {
-        Self::new(url, Method::Post)
-    }
-
-    /// Create a PUT request.
-    pub(crate) fn put(url: Url) -> Self {
-        Self::new(url, Method::Put)
     }
 
     /// Set the data to be uploaded in the request body.
@@ -481,15 +469,24 @@ impl Request {
         self
     }
 
-    /// Set the maximum time this request is allowed to take.
+    /// Set the maximum time this request is allowed to take, including opening a
+    /// connection if needed (e.g. including DNS resolution).
     pub fn timeout(mut self, timeout: Duration) -> Self {
         self.set_timeout(timeout);
         self
     }
 
-    /// Set the maximum time this request is allowed to take.
+    /// Set the maximum time this request is allowed to take, including opening a
+    /// connection if needed (e.g. including DNS resolution).
     pub fn set_timeout(&mut self, timeout: Duration) -> &mut Self {
-        self.timeout = Some(timeout);
+        self.overall_timeout = Some(timeout);
+        self
+    }
+
+    /// Set the maximum time to spend opening a connection, if required.
+    /// This includes DNS resolution and TCP/TLS initiation.
+    pub fn set_connect_timeout(&mut self, timeout: Duration) -> &mut Self {
+        self.connect_timeout = Some(timeout);
         self
     }
 
@@ -537,6 +534,14 @@ impl Request {
     /// to debug low-level protocol issues.
     pub fn verbose(mut self, verbose: bool) -> Self {
         self.set_verbose(verbose);
+        self
+    }
+
+    /// Configure whether the response body processing should use a limited or
+    /// unlimited queue. This should always be enabled except when something is
+    /// wrong with the limiting itself.
+    pub fn set_limit_response_buffering(&mut self, limit: bool) -> &mut Self {
+        self.limit_response_buffering = limit;
         self
     }
 
@@ -611,7 +616,11 @@ impl Request {
     /// Execute this request asynchronously.
     pub async fn send_async(self) -> Result<AsyncResponse, HttpClientError> {
         let request_info = self.ctx().info().clone();
-        let (receiver, streams) = ChannelReceiver::new();
+
+        // Don't limit response buffering - we don't have a good way to unpause the
+        // transfer for this single request flow.
+        let (receiver, streams) = ChannelReceiver::new(false);
+
         let request = self.into_streaming(Box::new(receiver));
 
         // Spawn the request as another task, which will block
@@ -795,15 +804,19 @@ impl Request {
             easy.cainfo(cainfo)?;
         }
 
-        if let Some(timeout) = self.timeout {
+        if let Some(timeout) = self.overall_timeout {
             easy.timeout(timeout)?;
+        }
+
+        if let Some(timeout) = self.connect_timeout {
+            easy.connect_timeout(timeout)?;
         }
 
         easy.http_version(self.http_version)?;
 
         if let Some(mts) = self.min_transfer_speed {
             easy.low_speed_limit(mts.min_bytes_per_second)?;
-            easy.low_speed_time(mts.grace_period)?;
+            easy.low_speed_time(mts.window)?;
         }
 
         // Tell libcurl to report progress to the handler.
@@ -832,8 +845,9 @@ pub struct StreamRequest {
 }
 
 impl StreamRequest {
-    pub fn send(self) -> Result<(), HttpClientError> {
-        let mut easy: Easy2H = self.try_into()?;
+    pub(crate) fn send(self) -> Result<(), HttpClientError> {
+        let claim = self.request.claimer.claim_request();
+        let mut easy: Easy2H = self.into_easy(claim)?;
         let res = easy.perform().map_err(Into::into);
         let _ = easy
             .get_mut()
@@ -842,14 +856,10 @@ impl StreamRequest {
             .done(res);
         Ok(())
     }
-}
 
-impl TryFrom<StreamRequest> for Easy2H {
-    type Error = HttpClientError;
-
-    fn try_from(req: StreamRequest) -> Result<Self, Self::Error> {
-        let StreamRequest { request, receiver } = req;
-        request.into_handle(|ctx| Box::new(Streaming::new(receiver, ctx)))
+    pub(crate) fn into_easy(self, claim: RequestClaim) -> Result<Easy2H, HttpClientError> {
+        let StreamRequest { request, receiver } = self;
+        request.into_handle(|ctx| Box::new(Streaming::new(receiver, ctx, claim)))
     }
 }
 
@@ -955,8 +965,10 @@ mod tests {
             .with_body("Hello, world!")
             .create();
 
+        let client = HttpClient::new();
+
         let url = Url::parse(&server.url())?.join("test")?;
-        let res = Request::get(url).header("X-Api-Key", "1234").send()?;
+        let res = client.get(url).header("X-Api-Key", "1234").send()?;
 
         mock.assert();
 
@@ -989,8 +1001,11 @@ mod tests {
             .with_body("Hello, world!")
             .create();
 
+        let client = HttpClient::new();
+
         let url = Url::parse(&server.url())?.join("test")?;
-        let res = Request::get(url)
+        let res = client
+            .get(url)
             .header("X-Api-Key", "1234")
             .send_async()
             .await?;
@@ -1027,8 +1042,10 @@ mod tests {
             .with_header("X-Served-By", "mock")
             .create();
 
+        let client = HttpClient::new();
+
         let url = Url::parse(&server.url())?.join("test")?;
-        let res = Request::head(url).header("X-Api-Key", "1234").send()?;
+        let res = client.head(url).header("X-Api-Key", "1234").send()?;
 
         mock.assert();
 
@@ -1061,8 +1078,10 @@ mod tests {
             .match_body(Matcher::Exact(body.into()))
             .create();
 
+        let client = HttpClient::new();
+
         let url = Url::parse(&server.url())?.join("test")?;
-        let res = Request::post(url).body(body.as_bytes()).send()?;
+        let res = client.post(url).body(body.as_bytes()).send()?;
 
         mock.assert();
         assert_eq!(res.head.status, StatusCode::CREATED);
@@ -1083,8 +1102,10 @@ mod tests {
             .match_body(Matcher::Exact(body.into()))
             .create();
 
+        let client = HttpClient::new();
+
         let url = Url::parse(&server.url())?.join("test")?;
-        let res = Request::post(url).body(body_bytes).send()?;
+        let res = client.post(url).body(body_bytes).send()?;
 
         mock.assert();
         assert_eq!(res.head.status, StatusCode::CREATED);
@@ -1104,8 +1125,11 @@ mod tests {
             .match_body(Matcher::Exact(body.into()))
             .create();
 
+        let client = HttpClient::new();
+
         let url = Url::parse(&server.url())?.join("test")?;
-        let res = Request::put(url)
+        let res = client
+            .put(url)
             .header("Content-Type", "text/plain")
             .body(body.as_bytes())
             .send()?;
@@ -1131,8 +1155,10 @@ mod tests {
             .match_body(Matcher::Json(body.clone()))
             .create();
 
+        let client = HttpClient::new();
+
         let url = Url::parse(&server.url())?.join("test")?;
-        let res = Request::post(url).json(&body)?.send()?;
+        let res = client.post(url).json(&body)?.send()?;
 
         mock.assert();
         assert_eq!(res.head.status, StatusCode::CREATED);
@@ -1161,8 +1187,10 @@ mod tests {
             .match_body(serde_cbor::to_vec(&body)?)
             .create();
 
+        let client = HttpClient::new();
+
         let url = Url::parse(&server.url())?.join("test")?;
-        let res = Request::post(url).cbor(&body)?.send()?;
+        let res = client.post(url).cbor(&body)?.send()?;
 
         mock.assert();
         assert_eq!(res.head.status, StatusCode::CREATED);
@@ -1185,8 +1213,10 @@ mod tests {
             Encoding::Other("foobar".into()),
         ];
 
+        let client = HttpClient::new();
+
         let url = Url::parse(&server.url())?.join("test")?;
-        let _ = Request::get(url).accept_encoding(encodings).send()?;
+        let _ = client.get(url).accept_encoding(encodings).send()?;
 
         mock.assert();
         Ok(())
@@ -1231,8 +1261,11 @@ mod tests {
             .mock("HEAD", "/test_callback")
             .with_status(200)
             .create();
+
+        let client = HttpClient::new();
+
         let url = Url::parse(&server.url())?.join("test_callback")?;
-        let _res = Request::head(url).send()?;
+        let _res = client.head(url).send()?;
 
         mock.assert();
         assert_eq!(called.load(Acquire), 1);

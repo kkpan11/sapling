@@ -46,7 +46,6 @@ from sapling import (
     perftrace,
     phases,
     progress,
-    pycompat,
     registrar,
     revsetlang,
     scmutil,
@@ -57,7 +56,7 @@ from sapling import (
     visibility,
 )
 from sapling.i18n import _
-from sapling.node import bin, hex, nullid, nullrev, short
+from sapling.node import hex, nullid, nullrev, short
 from sapling.utils import subtreeutil
 
 release = lock.release
@@ -286,21 +285,21 @@ class rebaseruntime:
 
     def _writestatus(self, f):
         repo = self.repo
-        f.write(pycompat.encodeutf8(repo[self.originalwd].hex() + "\n"))
+        f.write((repo[self.originalwd].hex() + "\n").encode())
         # was "dest". we now write dest per src root below.
         f.write(b"\n")
-        f.write(pycompat.encodeutf8(repo[self.external].hex() + "\n"))
+        f.write((repo[self.external].hex() + "\n").encode())
         f.write(b"%d\n" % int(self.collapsef))
         f.write(b"%d\n" % int(self.keepf))
         f.write(b"0\n")  # used to be the "keepbranches" flag.
         activebookmark = b""
         if self.activebookmark:
-            activebookmark = pycompat.encodeutf8(self.activebookmark)
+            activebookmark = self.activebookmark.encode()
         f.write(b"%s\n" % activebookmark)
         destmap = self.destmap.node2node
         for d, v in self.state.node2node.items():
             destnode = hex(destmap[d])
-            f.write(pycompat.encodeutf8("%s:%s:%s\n" % (hex(d), hex(v), destnode)))
+            f.write(("%s:%s:%s\n" % (hex(d), hex(v), destnode)).encode())
         repo.ui.debug("rebase status stored\n")
 
     def restorestatus(self):
@@ -317,7 +316,7 @@ class rebaseruntime:
 
         try:
             f = repo.localvfs("rebasestate")
-            for i, l in enumerate(pycompat.decodeutf8(f.read()).splitlines()):
+            for i, l in enumerate(f.read().decode().splitlines()):
                 if i == 0:
                     originalwd = repo[l].rev()
                 elif i == 1:
@@ -947,7 +946,7 @@ class rebaseruntime:
                     )
             if newnode is not None:
                 newrev = repo[newnode].rev()
-                for oldrev in pycompat.iterkeys(self.state):
+                for oldrev in self.state.keys():
                     self.state[oldrev] = newrev
 
         # restore original working directory
@@ -2190,7 +2189,7 @@ def storecollapsemsg(repo, collapsemsg: str) -> None:
     "Store the collapse message to allow recovery"
     collapsemsg = collapsemsg or ""
     f = repo.localvfs("last-message.txt", "wb")
-    f.write(b"%s\n" % pycompat.encodeutf8(collapsemsg))
+    f.write(b"%s\n" % collapsemsg.encode())
     f.close()
 
 
@@ -2203,7 +2202,7 @@ def restorecollapsemsg(repo, isabort) -> str:
     "Restore previously stored collapse message"
     try:
         f = repo.localvfs("last-message.txt", "rb")
-        collapsemsg = pycompat.decodeutf8(f.readline().strip())
+        collapsemsg = f.readline().strip().decode()
         f.close()
     except IOError as err:
         if err.errno != errno.ENOENT:
@@ -2492,7 +2491,7 @@ def summaryhook(ui, repo) -> None:
         msg = _('rebase: (use "hg rebase --abort" to clear broken state)\n')
         ui.write(msg)
         return
-    numrebased = len([i for i in pycompat.itervalues(state) if i >= 0])
+    numrebased = len([i for i in state.values() if i >= 0])
     # i18n: column positioning for "hg summary"
     ui.write(
         _("rebase: %s, %s (rebase --continue)\n")
