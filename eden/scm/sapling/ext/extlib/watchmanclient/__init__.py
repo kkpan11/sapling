@@ -11,12 +11,11 @@ import ctypes
 import os
 import time
 
-from sapling import blackbox, encoding, json, progress, pycompat, util
+from sapling import blackbox, encoding, json, progress, util
 from sapling.i18n import _
 from sapling.node import hex
 
 from .. import pywatchman
-from ..pywatchman import compat
 
 
 def createclientforrepo(repo):
@@ -448,7 +447,7 @@ class state_update:
             return False
 
 
-if pycompat.iswindows:
+if util.iswindows:
     from ctypes.wintypes import DWORD, HANDLE
 
     def openfilewin(path):
@@ -498,7 +497,7 @@ if pycompat.iswindows:
         finally:
             closehandler(h)
 
-elif pycompat.isdarwin:
+elif util.isdarwin:
     import ctypes.util
 
     F_GETPATH = 50
@@ -520,7 +519,7 @@ elif pycompat.isdarwin:
                 raise OSError(ctypes.get_errno())
             # buf is a bytes buffer, so normalize it if necessary
             ret = buf.value
-            if isinstance(name, compat.UNICODE):
+            if isinstance(name, str):
                 ret = os.fsdecode(ret)
             return ret
         finally:

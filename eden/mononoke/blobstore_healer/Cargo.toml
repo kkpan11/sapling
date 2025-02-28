@@ -13,14 +13,14 @@ path = "../cmds/blobstore_healer/main.rs"
 
 [dependencies]
 anyhow = "1.0.95"
-async-trait = "0.1.71"
+async-trait = "0.1.86"
 blobstore = { version = "0.1.0", path = "../blobstore" }
 blobstore_factory = { version = "0.1.0", path = "../blobstore/factory" }
 blobstore_sync_queue = { version = "0.1.0", path = "../blobstore_sync_queue" }
 borrowed = { version = "0.1.0", git = "https://github.com/facebookexperimental/rust-shed.git", branch = "main" }
 cached_config = { version = "0.1.0", git = "https://github.com/facebookexperimental/rust-shed.git", branch = "main" }
 chrono = { version = "0.4", features = ["clock", "serde", "std"], default-features = false }
-clap = { version = "4.5.20", features = ["derive", "env", "string", "unicode", "wrap_help"] }
+clap = { version = "4.5.30", features = ["derive", "env", "string", "unicode", "wrap_help"] }
 cloned = { version = "0.1.0", git = "https://github.com/facebookexperimental/rust-shed.git", branch = "main" }
 context = { version = "0.1.0", path = "../server/context" }
 fbinit = { version = "0.2.0", git = "https://github.com/facebookexperimental/rust-shed.git", branch = "main" }
@@ -31,7 +31,7 @@ metaconfig_types = { version = "0.1.0", path = "../metaconfig/types" }
 mononoke_app = { version = "0.1.0", path = "../cmdlib/mononoke_app" }
 mononoke_types = { version = "0.1.0", path = "../mononoke_types" }
 rand = { version = "0.8", features = ["small_rng"] }
-slog = { version = "2.7", features = ["max_level_trace", "nested-values"] }
+slog = { package = "tracing_slog_compat", version = "0.1.0", git = "https://github.com/facebookexperimental/rust-shed.git", branch = "main" }
 sql_construct = { version = "0.1.0", path = "../common/sql_construct" }
 sql_ext = { version = "0.1.0", path = "../common/rust/sql_ext" }
 tokio = { version = "1.41.0", features = ["full", "test-util", "tracing"] }

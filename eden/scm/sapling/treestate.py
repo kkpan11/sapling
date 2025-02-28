@@ -8,13 +8,12 @@
 from __future__ import absolute_import
 
 import errno
+import io
 
 from bindings import treestate
 
-from . import error, node, pycompat, txnutil, util
+from . import error, node, txnutil, util
 from .i18n import _
-from .pycompat import decodeutf8, encodeutf8
-
 
 # header after the first 40 bytes of dirstate.
 HEADER = b"\ntreestate\n\0"
@@ -53,11 +52,11 @@ def _packmetadata(dictobj):
         if "=" in k or "\0" in entry:
             raise error.ProgrammingError("illegal metadata entry: %r" % entry)
         result.append(entry)
-    return encodeutf8("\0".join(result))
+    return "\0".join(result).encode()
 
 
 def _unpackmetadata(data):
-    data = decodeutf8(data)
+    data = data.decode()
     return dict(entry.split("=", 1) for entry in data.split("\0") if "=" in entry)
 
 
@@ -147,10 +146,8 @@ class treestatemap:
         # use a new file
         self._rootid = self._tree.reset()
 
-    def iteritems(self):
+    def items(self):
         return ((k, self[k]) for k in self.keys())
-
-    items = iteritems
 
     def __iter__(self):
         return iter(self.keys())
@@ -349,7 +346,7 @@ class treestatemap:
 
     def _parsedirstate(content):
         """Parse given dirstate metadata file"""
-        f = util.stringio(content)
+        f = io.BytesIO(content)
         p1 = f.read(20) or node.nullid
         p2 = f.read(20) or node.nullid
         header = f.read(len(HEADER))

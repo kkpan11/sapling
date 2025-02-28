@@ -12,9 +12,11 @@
 
 from __future__ import absolute_import
 
+import collections
 import errno
 import string
 import struct
+import sys
 import typing
 
 import bindings
@@ -25,7 +27,6 @@ from . import (
     git,
     lock as lockmod,
     mutation,
-    pycompat,
     scmutil,
     txnutil,
     util,
@@ -33,7 +34,6 @@ from . import (
 )
 from .i18n import _
 from .node import bin, hex, nullid, short, wdirid
-from .pycompat import decodeutf8, encodeutf8
 
 # label constants
 # until 3.5, bookmarks.current was the advertised name, not
@@ -86,7 +86,6 @@ class bmstore(dict):
         try:
             for refspec, node in sorted(decoded.items()):
                 if node in nm:
-                    refspec = encoding.tolocal(refspec)
                     setitem(self, refspec, node)
                 else:
                     # This might happen if:
@@ -98,7 +97,6 @@ class bmstore(dict):
                     repo.invalidate()
                     nm = repo.changelog.nodemap
                     if node in nm:
-                        refspec = encoding.tolocal(refspec)
                         setitem(self, refspec, node)
                         repo.ui.log("features", feature="fix-bookmark-changelog-order")
                     else:
@@ -184,7 +182,7 @@ class bmstore(dict):
                     "bookmarks.current", "w", atomictemp=True, checkambig=True
                 )
                 try:
-                    f.write(encodeutf8(encoding.fromlocal(self._active)))
+                    f.write(self._active.encode())
                 finally:
                     f.close()
             else:
@@ -573,7 +571,7 @@ def binaryencode(bookmarks: typing.Iterable[typing.Tuple[str, bytes]]) -> bytes:
     for book, node in bookmarks:
         if not node:  # None or ''
             node = wdirid
-        book = pycompat.encodeutf8(book)
+        book = book.encode()
         binarydata.append(_binaryentry.pack(node, len(book)))
         binarydata.append(book)
     return b"".join(binarydata)
@@ -607,7 +605,7 @@ def binarydecode(stream):
                 raise error.Abort(_("bad bookmark stream"))
         if node == wdirid:
             node = None
-        books.append((decodeutf8(bookmark), node))
+        books.append((bookmark.decode(), node))
     return books
 
 
@@ -1148,7 +1146,7 @@ encoderemotenames = bindings.refencode.encoderemotenames
 decoderemotenames = bindings.refencode.decoderemotenames
 
 
-class lazyremotenamedict(pycompat.Mapping):
+class lazyremotenamedict(collections.abc.Mapping):
     """Read-only dict-like Class to lazily resolve remotename entries
 
     We are doing that because remotenames startup was slow.
@@ -1188,7 +1186,7 @@ class lazyremotenamedict(pycompat.Mapping):
                 if removednames:
                     repo.ui.log(
                         "features",
-                        fullargs=repr(pycompat.sysargv),
+                        fullargs=repr(sys.argv),
                         feature="auto-clean-remotenames",
                     )
                     entries = list(readremotenames(repo))

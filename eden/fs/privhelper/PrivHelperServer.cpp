@@ -62,6 +62,10 @@ using std::string;
 
 namespace facebook::eden {
 
+// Constants
+static constexpr folly::StringPiece kFamBinaryPath{
+    "/usr/local/libexec/eden/edenfs_fam"};
+
 PrivHelperServer::PrivHelperServer() = default;
 
 PrivHelperServer::~PrivHelperServer() = default;
@@ -850,7 +854,7 @@ void PrivHelperServer::nfsMount(
   rc = fsctl(
       mountPath.c_str(), FSCTL_SET_FSTYPENAME_OVERRIDE, (void*)"edenfs:", 0);
   if (rc != 0) {
-    unmount(mountPath.c_str());
+    unmount(mountPath.c_str(), {});
     checkUnixError(rc, "failed to fsctl");
   }
 
@@ -928,7 +932,9 @@ void PrivHelperServer::bindMount(
 #endif
 }
 
-void PrivHelperServer::unmount(const char* mountPath) {
+void PrivHelperServer::unmount(
+    const char* mountPath,
+    [[maybe_unused]] UnmountOptions options) {
 #ifdef __APPLE__
   auto rc = ::unmount(mountPath, MNT_FORCE);
 #else
@@ -949,12 +955,28 @@ void PrivHelperServer::unmount(const char* mountPath) {
   // something has gone wrong and a bind mount still exists inside this mount
   // for some reason.
   //
-  // In the future it might be nice to provide smarter unmount options,
-  // such as unmounting only if the mount point is not currently in use.
-  // However for now we always do forced unmount.  This helps ensure that
-  // edenfs does not get stuck waiting on unmounts to complete when shutting
-  // down.
-  const int umountFlags = UMOUNT_NOFOLLOW | MNT_FORCE | MNT_DETACH;
+  // For now we always do forced unmount during shutdown. This helps ensure
+  // that edenfs does not get stuck waiting on unmounts to complete.
+  // But we also allow non-force unmount via 'edenfsctl rm --no-force' for
+  // a more flexible behavior if needed.
+  //
+  // In the future it might be nice to provide more smarter unmount options.
+  int umountFlags = UMOUNT_NOFOLLOW | MNT_DETACH;
+
+  // Only "force" is checked because as this is implemented, we only plan to
+  // add "--no-force" as an option. The other options are not checked until
+  // we need to support valid use cases for them.
+  if (!options.detach || options.expire) {
+    XLOG(DFATAL) << "Unsupported unmount option provided: 'detach'"
+                 << options.detach;
+  }
+  if (options.expire) {
+    XLOG(DFATAL) << "Unsupported unmount option provided: 'expire'"
+                 << options.detach;
+  }
+  if (options.force) {
+    umountFlags |= MNT_FORCE;
+  }
   const auto rc = umount2(mountPath, umountFlags);
 #endif
   if (rc != 0) {
@@ -1020,7 +1042,8 @@ UnixSocket::Message PrivHelperServer::processMountNfsMsg(Cursor& cursor) {
 
 UnixSocket::Message PrivHelperServer::processUnmountMsg(Cursor& cursor) {
   string mountPath;
-  PrivHelperConn::parseUnmountRequest(cursor, mountPath);
+  UnmountOptions options;
+  PrivHelperConn::parseUnmountRequest(cursor, mountPath, options);
   XLOGF(DBG3, "unmount \"{}\"", mountPath);
 
   const auto it = mountPoints_.find(mountPath);
@@ -1028,7 +1051,7 @@ UnixSocket::Message PrivHelperServer::processUnmountMsg(Cursor& cursor) {
     throwf<std::domain_error>("No FUSE mount found for {}", mountPath);
   }
 
-  unmount(mountPath.c_str());
+  unmount(mountPath.c_str(), options);
   mountPoints_.erase(mountPath);
   return makeResponse();
 }
@@ -1043,7 +1066,7 @@ UnixSocket::Message PrivHelperServer::processNfsUnmountMsg(Cursor& cursor) {
     throwf<std::domain_error>("No NFS mount found for {}", mountPath);
   }
 
-  unmount(mountPath.c_str());
+  unmount(mountPath.c_str(), {});
   mountPoints_.erase(mountPath);
   return makeResponse();
 }
@@ -1161,6 +1184,88 @@ UnixSocket::Message PrivHelperServer::processGetPid() {
   return response;
 }
 
+UnixSocket::Message PrivHelperServer::processStartFam(
+    folly::io::Cursor& cursor) {
+  std::vector<std::string> paths;
+  string tmpOutputPath;
+  string specifiedOutputPath;
+  bool shouldUpload;
+
+  PrivHelperConn::parseStartFamRequest(
+      cursor, paths, tmpOutputPath, specifiedOutputPath, shouldUpload);
+
+  // sanity check to make sure we have at least one path
+  if (paths.empty()) {
+    XLOG(ERR)
+        << "Empty list of paths: At least one path should be provided to start FAM";
+    throwf<std::runtime_error>("expected at least one path to start FAM");
+  }
+
+  for (const auto& path : paths) {
+    XLOGF(DBG3, "FAM monitoring path with prefix \"{}\"", path);
+  }
+  XLOGF(DBG3, "FAM logging events to \"{}\"", tmpOutputPath);
+  XLOGF(DBG3, "FAM output file will be moved to \"{}\"", specifiedOutputPath);
+
+  auto opts = SpawnedProcess::Options();
+  opts.open(
+      STDOUT_FILENO,
+      canonicalPath(tmpOutputPath),
+      OpenFileHandleOptions::writeFile()); // TODO[lxw]: This can fail if the
+                                           // folder doesn't exist
+  opts.executablePath(canonicalPath(kFamBinaryPath));
+  std::vector<std::string> argv = {
+      "FileMonitor",
+      "-filter",
+      paths[0],
+      "-skipApple",
+      "-pretty",
+  };
+
+  famProcess_ = std::make_unique<FileAccessMonitorProcess>(
+      SpawnedProcess(argv, std::move(opts)),
+      std::move(tmpOutputPath),
+      std::move(specifiedOutputPath),
+      shouldUpload);
+
+  pid_t pid = famProcess_->proc.pid();
+
+  auto response = makeResponse();
+  response.data.unshare();
+  folly::io::Appender cursorResp{&response.data, 0};
+  cursorResp.writeBE<pid_t>(pid);
+  return response;
+}
+
+UnixSocket::Message PrivHelperServer::processStopFam() {
+  string tmpOutputPath = std::move(famProcess_->tmpOutputPath);
+  string specifiedOutputPath = std::move(famProcess_->specifiedOutputPath);
+  bool shouldUpload = famProcess_->shouldUpload;
+
+  pid_t pid = famProcess_->proc.pid();
+  // SIGTERM should be enough to terminate the process immediately, but we'll
+  // also try to kill it if it doesn't exit after a short time, e.g. 500ms.
+  auto status =
+      famProcess_->proc.terminateOrKill(std::chrono::milliseconds(500));
+  if (famProcess_->proc.terminated()) {
+    XLOG(DBG3) << "FAM process pid: " << pid << " terminated";
+  } else {
+    XLOG(ERR) << "Failed to terminate FAM pid: {} " << pid;
+    XLOG(ERR) << "FAM process status: " << status.str();
+
+    throwf<std::runtime_error>("Failed to terminate FAM pid: {}", pid);
+  }
+
+  famProcess_.reset();
+
+  auto response = makeResponse();
+  response.data.unshare();
+  folly::io::Appender cursor{&response.data, 0};
+  PrivHelperConn::serializeStopFamResponse(
+      cursor, tmpOutputPath, specifiedOutputPath, shouldUpload);
+  return response;
+}
+
 namespace {
 /// Get the file system ID, or an errno value on error
 folly::Expected<unsigned long, int> getFSID(const char* path) {
@@ -1177,7 +1282,7 @@ void PrivHelperServer::bindUnmount(const char* mountPath) {
   // so we can confirm that it has been unmounted afterwards.
   const auto origFSID = getFSID(mountPath);
 
-  unmount(mountPath);
+  unmount(mountPath, {});
 
   // Empirically, the unmount may not be complete when umount2() returns.
   // To work around this, we repeatedly invoke statvfs() on the bind mount
@@ -1354,6 +1459,10 @@ UnixSocket::Message PrivHelperServer::processMessage(
       return processSetUseEdenFs(cursor, request);
     case PrivHelperConn::REQ_GET_PID:
       return processGetPid();
+    case PrivHelperConn::REQ_START_FAM:
+      return processStartFam(cursor);
+    case PrivHelperConn::REQ_STOP_FAM:
+      return processStopFam();
     case PrivHelperConn::MSG_TYPE_NONE:
     case PrivHelperConn::RESP_ERROR:
       break;
@@ -1380,7 +1489,7 @@ void PrivHelperServer::receiveError(
 void PrivHelperServer::cleanupMountPoints() {
   for (const auto& mountPoint : mountPoints_) {
     try {
-      unmount(mountPoint.c_str());
+      unmount(mountPoint.c_str(), {});
     } catch (const std::exception& ex) {
       XLOGF(
           ERR,

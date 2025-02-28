@@ -10,13 +10,11 @@ from sapling import (
     extensions,
     lock as lockmod,
     merge,
-    pycompat,
     registrar,
     scmutil,
     visibility,
 )
 from sapling.i18n import _, _n
-
 
 cmdtable = {}
 command = registrar.command(cmdtable)
@@ -109,7 +107,7 @@ def _moveto(repo, bookmark, ctx, clean=False):
         diff = m1.diff(m2)
 
         changedfiles = []
-        changedfiles.extend(pycompat.iterkeys(diff))
+        changedfiles.extend(diff.keys())
 
         dirstate = repo.dirstate
         dirchanges = [f for f in dirstate if dirstate[f] != "n"]

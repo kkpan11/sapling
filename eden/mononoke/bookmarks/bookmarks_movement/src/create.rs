@@ -21,7 +21,6 @@ use mononoke_types::BonsaiChangeset;
 use mononoke_types::ChangesetId;
 use repo_authorization::AuthorizationContext;
 use repo_authorization::RepoWriteOperation;
-use repo_update_logger::find_draft_ancestors;
 use repo_update_logger::BookmarkInfo;
 use repo_update_logger::BookmarkOperation;
 
@@ -145,7 +144,8 @@ impl<'op> CreateBookmarkOp<'op> {
 
         check_bookmark_sync_config(ctx, repo, &self.bookmark, kind).await?;
 
-        self.affected_changesets
+        let validated_changesets = self
+            .affected_changesets
             .check_restrictions(
                 ctx,
                 authz,
@@ -199,36 +199,21 @@ impl<'op> CreateBookmarkOp<'op> {
                 )
                 .await?;
 
-                let txn_hook_fut = crate::git_mapping::populate_git_mapping_txn_hook(
+                let txn_hook = crate::git_mapping::populate_git_mapping_txn_hook(
                     ctx,
                     repo,
                     self.target,
                     self.affected_changesets.new_changesets(),
-                );
-
-                let to_log = async {
-                    if self.log_new_public_commits_to_scribe {
-                        let res = find_draft_ancestors(ctx, repo, self.target).await;
-                        match res {
-                            Ok(bcss) => bcss,
-                            Err(err) => {
-                                ctx.scuba().clone().log_with_msg(
-                                    "Failed to find draft ancestors",
-                                    Some(format!("{}", err)),
-                                );
-                                vec![]
-                            }
-                        }
-                    } else {
-                        vec![]
-                    }
-                };
-
-                let (txn_hook_res, to_log) = futures::join!(txn_hook_fut, to_log);
-                if let Some(txn_hook) = txn_hook_res? {
+                )
+                .await?;
+                if let Some(txn_hook) = txn_hook {
                     txn_hooks.push(txn_hook);
                 }
-
+                let to_log = if self.log_new_public_commits_to_scribe {
+                    validated_changesets
+                } else {
+                    vec![]
+                };
                 ctx.scuba()
                     .clone()
                     .add("bookmark", self.bookmark.to_string())

@@ -29,6 +29,7 @@ use edenfs_client::checkout::find_checkout;
 use edenfs_client::checkout::CheckoutConfig;
 use edenfs_client::redirect::get_configured_redirections;
 use edenfs_client::redirect::get_effective_redirections;
+use edenfs_client::redirect::get_effective_redirs_for_mount;
 use edenfs_client::redirect::try_add_redirection;
 use edenfs_client::redirect::Redirection;
 use edenfs_client::redirect::RedirectionState;
@@ -154,7 +155,7 @@ impl RedirectCmd {
                     .map(|x| x.display().to_string())
                     .unwrap_or_default(),
                 redir.source,
-                redir.state.unwrap_or(RedirectionState::UnknownMount),
+                redir.state,
             ));
         }
         println!("{}", table);
@@ -172,26 +173,15 @@ impl RedirectCmd {
     }
 
     async fn list(&self, mount: Option<PathBuf>, json: bool) -> Result<ExitCode> {
-        let instance = EdenFsInstance::global();
         let mount = match mount {
             Some(provided) => provided,
             None => expand_path_or_cwd("").with_context(|| {
                 anyhow!("could not infer mount: could not determine current working directory")
             })?,
         };
-        let checkout = find_checkout(instance, &mount)?;
-        let mut redirections = get_effective_redirections(&checkout).with_context(|| {
-            anyhow!(
-                "Unable to retrieve redirections for checkout '{}'",
-                mount.display()
-            )
-        })?;
-
-        redirections
-            .values_mut()
-            .map(|v| v.update_target_abspath(&checkout))
-            .collect::<Result<Vec<()>, _>>()
-            .with_context(|| anyhow!("failed to expand redirection target path"))?;
+        let instance = EdenFsInstance::global();
+        let redirections = get_effective_redirs_for_mount(instance, mount)
+            .with_context(|| anyhow!("Failed to get redirections for mount"))?;
 
         if json {
             self.print_redirection_json(redirections)
@@ -291,11 +281,7 @@ impl RedirectCmd {
         })?;
 
         for redir in recomputed_redirs.values() {
-            if !redir
-                .state
-                .as_ref()
-                .map_or(true, |v| RedirectionState::MatchesConfiguration != *v)
-            {
+            if redir.state == RedirectionState::MatchesConfiguration {
                 eprintln!("error: at least one redirection does not match its configuration");
                 return Ok(1);
             }
@@ -407,7 +393,7 @@ impl RedirectCmd {
         })?;
 
         for redir in redirs.values() {
-            if redir.state == Some(RedirectionState::MatchesConfiguration)
+            if redir.state == RedirectionState::MatchesConfiguration
                 && !(force_remount_bind_mounts && redir.redir_type == RedirectionType::Bind)
             {
                 tracing::debug!(
@@ -449,13 +435,11 @@ impl RedirectCmd {
             )
         })?;
         for redir in effective_redirs.values() {
-            if let Some(state) = &redir.state {
-                if *state != RedirectionState::MatchesConfiguration {
-                    // When --only-repo-source is passed, we may fail to fixup some redirections.
-                    // This scenario is ok and should not be considered a failure.
-                    if !only_repo_source || redir.source == REPO_SOURCE {
-                        return Ok(1);
-                    }
+            if redir.state != RedirectionState::MatchesConfiguration {
+                // When --only-repo-source is passed, we may fail to fixup some redirections.
+                // This scenario is ok and should not be considered a failure.
+                if !only_repo_source || redir.source == REPO_SOURCE {
+                    return Ok(1);
                 }
             }
         }

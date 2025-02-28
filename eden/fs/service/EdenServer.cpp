@@ -64,6 +64,7 @@
 #include "eden/fs/config/MountProtocol.h"
 #include "eden/fs/config/TomlConfig.h"
 #include "eden/fs/inodes/EdenMount.h"
+#include "eden/fs/inodes/FileInode.h"
 #include "eden/fs/inodes/InodeAccessLogger.h"
 #include "eden/fs/inodes/InodeBase.h"
 #include "eden/fs/inodes/InodeMap.h"
@@ -342,6 +343,17 @@ std::shared_ptr<folly::Executor> makeFsChannelThreads(
   return fsChannelThreads;
 }
 
+std::shared_ptr<folly::Executor> makeCheckoutRevisionThreads(
+    bool useCheckoutExecutor,
+    std::shared_ptr<const EdenConfig>& edenConfig) {
+  if (useCheckoutExecutor) {
+    return std::make_shared<UnboundedQueueExecutor>(
+        edenConfig->numCheckoutThreads.getValue(),
+        "CheckoutRevisionThreadPool");
+  }
+  return nullptr;
+}
+
 } // namespace
 
 namespace facebook::eden {
@@ -485,6 +497,10 @@ EdenServer::EdenServer(
       thriftUseResourcePools_{edenConfig->thriftUseResourcePools.getValue()},
       thriftUseSerialExecution_{
           edenConfig->thriftUseSerialExecution.getValue()},
+      thriftUseCheckoutExecutor_{
+          edenConfig->thriftUseCheckoutExecutor.getValue()},
+      checkoutRevisionExecutor_{
+          makeCheckoutRevisionThreads(thriftUseCheckoutExecutor_, edenConfig)},
       progressManager_{
           std::make_unique<folly::Synchronized<EdenServer::ProgressManager>>()},
       startupStatusChannel_{std::move(startupStatusChannel)} {
@@ -779,7 +795,7 @@ folly::SemiFuture<Unit> EdenServer::unmountAll() {
       // is important to ensure that the EdenMount object cannot be destroyed
       // before EdenMount::unmount() completes.
       auto mount = info.edenMount;
-      auto future = mount->unmount().defer(
+      auto future = mount->unmount({}).defer(
           [mount, unmountFuture = info.unmountPromise.getFuture()](
               auto&& result) mutable {
             if (result.hasValue()) {
@@ -913,10 +929,17 @@ void EdenServer::startPeriodicTasks() {
   if (config->enableOBCOnEden.getValue()) {
     // Get the hostname without the ".facebook.com" suffix
     auto hostname = facebook::network::getLocalHost(/*stripFbDomain=*/true);
+    std::vector<std::string> entities;
+    auto reWorkerID = std::getenv("REMOTE_EXECUTION_WORKER");
+    if (reWorkerID == nullptr) {
+      entities = {hostname};
+    } else {
+      entities = {hostname, fmt::format("{}:{}", hostname, reWorkerID)};
+    }
     memory_vm_rss_bytes_ = monitoring::OBCAvg(
         monitoring::OdsCategoryId::ODS_EDEN,
         fmt::format("eden.{}", kMemoryVmRssBytes),
-        {hostname});
+        entities);
     // Report memory usage stats once every 60 seconds
     memoryStatsTask_.updateInterval(60s);
   }
@@ -1893,7 +1916,9 @@ ImmediateFuture<std::shared_ptr<EdenMount>> EdenServer::mount(
       });
 }
 
-folly::SemiFuture<Unit> EdenServer::unmount(AbsolutePathPiece mountPath) {
+folly::SemiFuture<Unit> EdenServer::unmount(
+    AbsolutePathPiece mountPath,
+    UnmountOptions options) {
   return folly::makeSemiFutureWith([&] {
            auto future = Future<Unit>::makeEmpty();
            auto mount = std::shared_ptr<EdenMount>{};
@@ -1910,7 +1935,7 @@ folly::SemiFuture<Unit> EdenServer::unmount(AbsolutePathPiece mountPath) {
 
            // We capture the mount shared_ptr in the lambda to keep the
            // EdenMount object alive during the call to unmount.
-           return mount->unmount().deferValue(
+           return mount->unmount(options).deferValue(
                [mount, f = std::move(future)](auto&&) mutable {
                  return std::move(f);
                });
@@ -2119,15 +2144,134 @@ ImmediateFuture<CheckoutResult> EdenServer::checkOutRevision(
                     }
                   });
             }
+            // Verify if cache file invalidation works as expected after
+            // checkout
+            // TODO T213849128: This is to collect data for S439820.
+            // We can remove this once SEV close.
+            if (isNfs &&
+                serverState_->getReloadableConfig()
+                    ->getEdenConfig()
+                    ->verifyFilesAfterCheckout.getValue()) {
+              std::vector<InodeNumber> inodesToValidate;
+              inodesToValidate.swap(result.sampleInodesToValidate);
+              folly::via(
+                  this->getServerState()->getValidationThreadPool().get(),
+                  [this,
+                   inodesToValidate = std::move(inodesToValidate),
+                   mountPath = mountPath.copy(),
+                   maxSizeOfFileToVerifyInvalidation =
+                       this->serverState_->getReloadableConfig()
+                           ->getEdenConfig()
+                           ->maxSizeOfFileToVerifyInvalidation.getValue(),
+                   structuredLogger =
+                       this->serverState_->getStructuredLogger()]() {
+                    // for each inode
+                    std::vector<ImmediateFuture<std::tuple<
+                        RelativePath,
+                        InodeNumber,
+                        std::optional<Hash20>>>>
+                        expectedContents;
+                    {
+                      // note we don't want to hold the mount handle in the
+                      // capture because that would block shutdown until this
+                      // future completes. This check can block waiting for the
+                      // eden fuse threads to complete an fs request. We don't
+                      // want to make a cycle, so to be safe we just attempt to
+                      // lookup the mount and gracefully handle errors.
+                      auto mountHandle = this->getMount(mountPath);
+                      auto inodeMap = mountHandle.getEdenMount().getInodeMap();
+                      for (auto& inodeNum : inodesToValidate) {
+                        auto inode = inodeMap->lookupLoadedInode(inodeNum);
+                        if (!inode) {
+                          // Skip if inode doesn't exist because it is already
+                          // invalidated
+                          continue;
+                        }
+                        auto path = inode->getPath();
+                        if (!path.has_value()) {
+                          // skip if we can't get the path because we
+                          // can't validate it anyway
+                          continue;
+                        }
+                        if (auto fileInode = inode.asFile()) {
+                          expectedContents.emplace_back(
+                              fileInode
+                                  ->getSha1(
+                                      ObjectFetchContext::getNullContext())
+                                  .thenValue(
+                                      [path = inode->getPath(),
+                                       inodeNum](auto&& sha1) mutable
+                                      -> std::tuple<
+                                          RelativePath,
+                                          InodeNumber,
+                                          std::optional<Hash20>> {
+                                        return {
+                                            std::move(path).value(),
+                                            inodeNum,
+                                            std::move(sha1)};
+                                      }));
+                        } else {
+                          expectedContents.emplace_back(std::tuple<
+                                                        RelativePath,
+                                                        InodeNumber,
+                                                        std::optional<Hash20>>(
+                              std::move(path).value(), inodeNum, std::nullopt));
+                        }
+                      }
+                    }
+
+                    return collectAll(std::move(expectedContents))
+                        .thenValue([mountPath = mountPath.copy(),
+                                    maxSizeOfFileToVerifyInvalidation,
+                                    structuredLogger](auto&& expectedResults) {
+                          for (auto& result : expectedResults) {
+                            if (!result.hasValue()) {
+                              continue;
+                            }
+                            auto [path, inodeNum, sha1Result] = result.value();
+                            auto fileStat =
+                                getFileStat((mountPath + path).value().c_str());
+                            if (!fileStat.hasValue()) {
+                              // Skip if file stat is not available
+                              continue;
+                            } else if (
+                                fileStat.value().size >
+                                maxSizeOfFileToVerifyInvalidation) {
+                              // Skip verification for large files
+                              continue;
+                            }
+                            // sha1 the path
+                            std::string contents;
+                            folly::readFile(
+                                (mountPath + path).value().c_str(), contents);
+
+                            auto actualSha1 = Hash20::sha1(contents);
+
+                            if (actualSha1 != sha1Result) {
+                              // log to scuba.
+                              structuredLogger->logEvent(StaleContents{
+                                  path.value(), inodeNum.getRawValue()});
+                              std::string sha1ResultStr =
+                                  sha1Result ? sha1Result->toString() : "none";
+                              XLOG(
+                                  WARN,
+                                  "Stale file contents after checkout for path {} (ino {}) - actual sha1: {} , expected sha1: {}",
+                                  path.value(),
+                                  inodeNum.getRawValue(),
+                                  actualSha1.toString(),
+                                  sha1ResultStr);
+                            }
+                          }
+                        });
+                  });
+            }
+
             return std::move(result);
           });
 
-  if (config_->getEdenConfig()->runCheckoutOnEdenCPUThreadpool.getValue()) {
-    // This is a temporary workaround for S399431: The checkoutFuture is
-    // scheduled on the EdenServer's EdenCPUThreadPool threadpool. This is a
-    // UnboundedQueueExecutor, which is guaranteed to never block. nor throw
-    // (except OOM), nor execute inline from `add()`. At the time of writing, it
-    // has a default threadpool size of 12.
+  if (thriftUseCheckoutExecutor_) {
+    // This is an UnboundedQueueExecutor, which is guaranteed to never block
+    // nor throw (except OOM), nor execute inline from `add()`.
     //
     // Thrift documentation states that "it is almost never a good idea to send
     // work off Thrift’s CPU worker". However, it also notes that "user code may
@@ -2141,14 +2285,8 @@ ImmediateFuture<CheckoutResult> EdenServer::checkOutRevision(
     // potential slowdowns, and/or OOMS. EdenFS only allows one checkout at a
     // time (https://fburl.com/code/a6eoy8wu), which acts as the aformentioned
     // backpressure mechanism.
-    //
-    // Futher investigation is needed to understand the underlying performance
-    // issues that are causing S399431, likely due to Overlay slowness and
-    // contention of the contents_ lock that is held while doing Overlay IO in
-    // TreeInode::childMaterialized (https://fburl.com/code/gxpaifv3).
-    checkoutFuture = std::move(checkoutFuture)
-                         .semi()
-                         .via(getServerState()->getThreadPool().get());
+    checkoutFuture =
+        std::move(checkoutFuture).semi().via(checkoutRevisionExecutor_.get());
   }
 
   return std::move(checkoutFuture).ensure([mountHandle] {});

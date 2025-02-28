@@ -19,7 +19,7 @@ import bindings
 
 from sapling import hgdemandimport as demandimport
 
-from . import encoding, error, extensions, pycompat, util
+from . import encoding, error, extensions, util
 from .i18n import _
 
 
@@ -86,10 +86,7 @@ def _pythonhook(ui, repo, htype, hname, funcname, args, throw):
         if isinstance(exc, error.Abort):
             ui.warn(_("error: %s hook failed: %s\n") % (hname, exc.args[0]))
         else:
-            ui.warn(
-                _("error: %s hook raised an exception: %s\n")
-                % (hname, encoding.strtolocal(str(exc)))
-            )
+            ui.warn(_("error: %s hook raised an exception: %s\n") % (hname, str(exc)))
         if throw:
             raise
         ui.traceback(force=True)
@@ -142,7 +139,7 @@ def _exthook(ui, repo, htype, name, cmd, args, throw, background=False):
     if repo:
         cwd = repo.root
     else:
-        cwd = pycompat.getcwd()
+        cwd = os.getcwd()
 
     if background:
         full_env = util.shellenviron(env)

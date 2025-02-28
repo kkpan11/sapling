@@ -15,6 +15,9 @@
 from __future__ import absolute_import
 
 import base64
+import http.client as httplib
+import http.cookiejar as cookielib
+import io
 import os
 import socket
 
@@ -23,16 +26,12 @@ from . import (
     error,
     httpconnection as httpconnectionmod,
     keepalive,
-    pycompat,
     sslutil,
     urllibcompat,
     util,
 )
 from .i18n import _
 
-# pyre-fixme[11]: Annotation `client` is not defined as a type.
-httplib = util.httplib
-stringio = util.stringio
 urlerr = util.urlerr
 urlreq = util.urlreq
 
@@ -280,7 +279,7 @@ def _generic_proxytunnel(self):
         res.length = None
         res.chunked = 0
         res.will_close = 1
-        res.msg = httplib.HTTPMessage(stringio())
+        res.msg = httplib.HTTPMessage(io.BytesIO())
         return False
 
     res.msg = httplib.HTTPMessage(res.fp)
@@ -501,10 +500,10 @@ class cookiehandler(urlreq.basehandler):
 
         cookiefile = util.expandpath(cookiefile)
         try:
-            cookiejar = util.cookielib.MozillaCookieJar(cookiefile)
+            cookiejar = cookielib.MozillaCookieJar(cookiefile)
             cookiejar.load()
             self.cookiejar = cookiejar
-        except util.cookielib.LoadError as e:
+        except cookielib.LoadError as e:
             ui.warn(
                 _("(error loading cookie file %s: %s; continuing without cookies)\n")
                 % (cookiefile, str(e))

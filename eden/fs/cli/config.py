@@ -40,11 +40,13 @@ from typing import (
 )
 
 import facebook.eden.ttypes as eden_ttypes
+
 import toml
 from eden.thrift import legacy
 from eden.thrift.legacy import EdenNotRunningError
 from facebook.eden.ttypes import MountInfo as ThriftMountInfo, MountState
 from filelock import BaseFileLock, FileLock
+from thrift.Thrift import TApplicationException
 
 from . import configinterpolator, configutil, telemetry, util, version
 
@@ -212,6 +214,7 @@ class CheckoutConfig(typing.NamedTuple):
     re_use_case: str
     enable_windows_symlinks: bool
     inode_catalog_type: Optional[str]
+    off_mount_repo_dir: bool
 
 
 class ListMountInfo(typing.NamedTuple):
@@ -816,17 +819,18 @@ Do you want to run `eden mount %s` instead?"""
                 env=env,
             )
 
-            configs = dict()
+            configs = {}
             if checkout.get_config().scm_type == "filteredhg":
                 configs["extensions.edensparse"] = ""
                 configs["extensions.sparse"] = "!"
-            for k, v in configs.items():
+            if len(configs) > 0:
+                args = [f"{k}={v}" for k, v in configs.items()]
                 subprocess.check_call(
                     [
                         os.environ.get("EDEN_HG_BINARY", "hg"),
                         "config",
                         "--local",
-                        f"{k}={v}",
+                        *args,
                         "-R",
                         str(checkout.path),
                     ],
@@ -899,7 +903,7 @@ Do you want to run `eden mount %s` instead?"""
 
         return 0
 
-    def unmount(self, path: str) -> None:
+    def unmount(self, path: str, use_force: bool = True) -> None:
         """Ask edenfs to unmount the specified checkout."""
         # In some cases edenfs can take a long time unmounting while it waits for
         # inodes to become unreferenced.  Ideally we should have edenfs timeout and
@@ -908,7 +912,22 @@ Do you want to run `eden mount %s` instead?"""
         # For now at least time out here so the CLI commands do not hang in this
         # case.
         with self.get_thrift_client_legacy(timeout=60) as client:
-            client.unmount(os.fsencode(path))
+            mountPoint = os.fsencode(path)
+            unmount_arg = eden_ttypes.UnmountArgument(
+                mountId=eden_ttypes.MountId(mountPoint=mountPoint),
+                useForce=use_force,
+            )
+
+            try:
+                client.unmountV2(unmount_arg)
+            except TApplicationException as e:
+                # Fallback to old unmount in the case that this is running
+                # against an older version of EdenFS in which unmountV2 is
+                # not known
+                if e.type == TApplicationException.UNKNOWN_METHOD:
+                    client.unmount(mountPoint)
+                else:
+                    raise e
 
     def destroy_mount(
         self, path: Union[Path, str], preserve_mount_point: bool = False
@@ -1370,6 +1389,7 @@ class EdenCheckout:
                 "use-write-back-cache": checkout_config.use_write_back_cache,
                 "enable-windows-symlinks": checkout_config.enable_windows_symlinks,
                 "inode-catalog-type": checkout_config.inode_catalog_type,
+                "off-mount-repo-dir": checkout_config.off_mount_repo_dir,
             },
             "redirections": redirections,
             "profiles": {
@@ -1543,6 +1563,10 @@ class EdenCheckout:
         if not isinstance(enable_windows_symlinks, bool):
             enable_windows_symlinks = False
 
+        off_mount_repo_dir = repository.get("off-mount-repo-dir")
+        if not isinstance(off_mount_repo_dir, bool):
+            off_mount_repo_dir = False
+
         inode_catalog_type = repository.get("inode-catalog-type")
         if inode_catalog_type is not None:
             if (
@@ -1586,6 +1610,7 @@ class EdenCheckout:
             re_use_case=re_use_case,
             enable_windows_symlinks=enable_windows_symlinks,
             inode_catalog_type=inode_catalog_type,
+            off_mount_repo_dir=off_mount_repo_dir,
         )
 
     def parse_snapshot_component(self, buf: bytes) -> Tuple[str, Optional[str]]:
@@ -2098,6 +2123,7 @@ def get_repo_info(
     backing_store_type: Optional[str] = None,
     re_use_case: Optional[str] = None,
     enable_windows_symlinks: bool = False,
+    off_mount_repo_dir: bool = False,
 ) -> Tuple[util.Repo, CheckoutConfig]:
     # Check to see if repo_arg points to an existing EdenFS mount
     checkout_config = instance.get_checkout_config_for_path(repo_arg)
@@ -2127,9 +2153,10 @@ def get_repo_info(
         nfs,
         case_sensitive,
         overlay_type,
-        backing_store_type,
-        re_use_case,
-        enable_windows_symlinks,
+        backing_store_type=backing_store_type,
+        re_use_case=re_use_case,
+        enable_windows_symlinks=enable_windows_symlinks,
+        off_mount_repo_dir=off_mount_repo_dir,
     )
 
     return repo, checkout_config
@@ -2144,6 +2171,7 @@ def create_checkout_config(
     backing_store_type: Optional[str] = None,
     re_use_case: Optional[str] = None,
     enable_windows_symlinks: bool = False,
+    off_mount_repo_dir: bool = False,
 ) -> CheckoutConfig:
     mount_protocol = util.get_protocol(nfs)
 
@@ -2194,6 +2222,7 @@ def create_checkout_config(
         re_use_case=re_use_case or "buck2-default",
         enable_windows_symlinks=enable_windows_symlinks,
         inode_catalog_type=overlay_type,
+        off_mount_repo_dir=off_mount_repo_dir,
     )
 
     return repo_config

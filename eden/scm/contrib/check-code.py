@@ -32,7 +32,6 @@ import os
 import re
 import sys
 
-
 # for not skipping the checking of the code of this file
 SKIP_CODE_CHECK = "no-" + "check-code"
 
@@ -352,14 +351,13 @@ pypats = [
 corepypats = [
     [
         (r"^import atexit", "don't use atexit, use ui.atexit"),
-        (r"^import Queue", "don't use Queue, use util.queue + util.empty"),
         (r"^import cStringIO", "don't use cStringIO.StringIO, use util.stringio"),
         (r"^import SocketServer", "don't use SockerServer, use util.socketserver"),
         (r"^import urlparse", "don't use urlparse, use util.urlreq"),
         (r"^import xmlrpclib", "don't use xmlrpclib, use util.xmlrpclib"),
         (r"^import httplib", "don't use httplib, use util.httplib"),
         (r"^import BaseHTTPServer", "use util.httpserver instead"),
-        (r"platform\.system\(\)", "don't use platform.system(), use pycompat"),
+        (r"platform\.system\(\)", "don't use platform.system(), use util"),
         # rules depending on implementation of repquote()
         (r' x+[xpqo%APM][\'"]\n\s+[\'"]x', "string join across lines with no space"),
         (
@@ -395,17 +393,6 @@ pyfilters = [
           (?P=quote))""",
         reppython,
     )
-]
-
-# non-filter patterns
-pynfpats = [
-    [
-        (r'pycompat\.osname\s*[=!]=\s*[\'"]nt[\'"]', "use pycompat.iswindows"),
-        (r'pycompat\.osname\s*[=!]=\s*[\'"]posix[\'"]', "use pycompat.isposix"),
-        (r'pycompat\.sysplatform\s*[!=]=\s*[\'"]darwin[\'"]', "use pycompat.isdarwin"),
-    ],
-    # warnings
-    [],
 ]
 
 # extension non-filter patterns
@@ -487,11 +474,10 @@ py3pats = [
 checks = [
     ("python", r".*\.(py|cgi)$", r"^#!.*python", pyfilters, pypats),
     ("python", r"sapling.*\.(py|cgi)$", r"^#!.*python", pyfilters, corepypats),
-    ("python", r".*\.(py|cgi)$", r"^#!.*python", [], pynfpats),
     ("python", r".*ext.*\.py$", "", [], pyextnfpats),
     (
         "python 3",
-        r".*(ext|mercurial)/(?!demandimport|pycompat).*\.py",
+        r".*(ext|mercurial)/(?!demandimport).*\.py",
         "",
         pyfilters,
         py3pats,

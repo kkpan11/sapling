@@ -15,16 +15,14 @@
 
 from __future__ import absolute_import
 
+import io
 import os
 import re
 import signal
 from typing import Dict, Optional
 
-from . import encoding, error, patch as patchmod, progress, pycompat, scmutil, util
+from . import encoding, error, patch as patchmod, progress, scmutil, util
 from .i18n import _
-
-
-stringio = util.stringio
 
 # patch comments based on the git one
 diffhelptext: str = _(
@@ -206,7 +204,7 @@ class uiheader(patchnode):
         self.hunks = [uihunk(h, self) for h in self.hunks]
 
     def prettystr(self):
-        x = stringio()
+        x = io.BytesIO()
         self.pretty(x)
         return x.getvalue()
 
@@ -427,7 +425,7 @@ class uihunk(patchnode):
     pretty = write
 
     def prettystr(self):
-        x = stringio()
+        x = io.BytesIO()
         self.pretty(x)
         return x.getvalue()
 
@@ -940,7 +938,7 @@ class curseschunkselector:
         width = self.xscreensize
         # turn tabs into spaces
         instr = instr.expandtabs(4)
-        strwidth = encoding.colwidth(pycompat.decodeutf8(instr, errors="replace"))
+        strwidth = encoding.colwidth(instr.decode(errors="replace"))
         numspaces = width - ((strwidth + xstart) % width) - 1
         return instr + b" " * numspaces + b"\n"
 
@@ -1103,7 +1101,7 @@ class curseschunkselector:
             for line in self._getstatuslines():
                 printstring(
                     self.statuswin,
-                    pycompat.encodeutf8(line),
+                    line.encode(),
                     pairname="legend",
                     attrlist=[curses.A_BOLD],
                 )
@@ -1191,7 +1189,7 @@ class curseschunkselector:
             textlist = text.split(b"\n")
             linestr = checkbox + textlist[0]
         else:
-            linestr = checkbox + pycompat.encodeutf8(header.filename())
+            linestr = checkbox + header.filename().encode()
         outstr += self.printstring(self.chunkpad, linestr, pair=colorpair, towin=towin)
         if not header.folded or ignorefolding:
             if len(textlist) > 1:
@@ -1494,7 +1492,7 @@ the following are valid keystrokes:
             for line in helplines:
                 self.printstring(
                     helpwin,
-                    pycompat.encodeutf8(line),
+                    line.encode(),
                     pairname="legend",
                     attrlist=[curses.A_BOLD],
                 )
@@ -1522,7 +1520,7 @@ the following are valid keystrokes:
         "display an informational window, then wait for and return a keypress."
 
         confirmwin = curses.newwin(self.yscreensize, 0, 0, 0)
-        windowtext = pycompat.encodeutf8(windowtext)
+        windowtext = windowtext.encode()
         try:
             lines = windowtext.split(b"\n")
             for line in lines:
@@ -1622,18 +1620,16 @@ are you sure you want to review/edit and confirm the selected changes [yn]?
                 return None
 
             # write the initial patch
-            patch = stringio()
-            patch.write(pycompat.encodeutf8(diffhelptext + hunkhelptext))
+            patch = io.BytesIO()
+            patch.write((diffhelptext + hunkhelptext).encode())
             chunk.header.write(patch)
             chunk.write(patch)
 
             # start the editor and wait for it to complete
             try:
-                patch = pycompat.encodeutf8(
-                    self.ui.edit(
-                        pycompat.decodeutf8(patch.getvalue()), "", action="diff"
-                    )
-                )
+                patch = self.ui.edit(
+                    patch.getvalue().decode(), "", action="diff"
+                ).encode()
             except error.Abort as exc:
                 self.errorstr = str(exc)
                 return None

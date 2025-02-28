@@ -14,9 +14,8 @@ from __future__ import absolute_import
 
 import string
 
-from . import error, node, parser, pycompat, util
+from . import error, node, parser, util
 from .i18n import _
-from .pycompat import range
 
 elements = {
     # token-type: binding-strength, primary, prefix, infix, suffix
@@ -56,7 +55,7 @@ _simpleopletters = set(iter("()[]#:=,-|&+!~^%"))
 
 # default set of valid characters for the initial letter of symbols
 _syminitletters = set(iter(string.ascii_letters + string.digits + "._@")) | set(
-    map(pycompat.bytechr, range(128, 256))
+    map(chr, range(128, 256))
 )
 
 # default set of valid characters for non-initial letters of symbols
@@ -84,7 +83,7 @@ def tokenize(program, lookup=None, syminitletters=None, symletters=None):
     [('symbol', '@', 0), ('::', None, 1), ('end', None, 3)]
 
     """
-    program = pycompat.bytestr(program)
+    program = str(program)
     if syminitletters is None:
         syminitletters = _syminitletters
     if symletters is None:
@@ -703,7 +702,7 @@ def formatspec(expr, *args):
         m = l // 2
         return "(%s or %s)" % (listexp(s[:m], t), listexp(s[m:], t))
 
-    expr = pycompat.bytestr(expr)
+    expr = str(expr)
     ret = ""
     pos = 0
     arg = 0

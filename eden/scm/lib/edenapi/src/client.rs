@@ -128,7 +128,6 @@ use minibytes::Bytes as RawBytes;
 use minibytes::Bytes;
 use once_cell::sync::Lazy;
 use parking_lot::Once;
-use progress_model::AggregatingProgressBar;
 use progress_model::ProgressBar;
 use repourl::encode_repo_name;
 use serde::de::DeserializeOwned;
@@ -165,6 +164,7 @@ mod paths {
     pub const BLAME: &str = "blame";
     pub const BOOKMARKS: &str = "bookmarks";
     pub const BOOKMARKS2: &str = "bookmarks2";
+    pub const CAPABILITIES: &str = "capabilities";
     pub const CLOUD_HISTORICAL_VERSIONS: &str = "cloud/historical_versions";
     pub const CLOUD_REFERENCES: &str = "cloud/references";
     pub const CLOUD_RENAME_WORKSPACE: &str = "cloud/rename_workspace";
@@ -200,7 +200,7 @@ mod paths {
     pub const UPLOAD_FILENODES: &str = "upload/filenodes";
     pub const UPLOAD_TREES: &str = "upload/trees";
     pub const UPLOAD_IDENTICAL_CHANGESET: &str = "upload/changesets/identical";
-    pub const UPLOAD: &str = "upload/";
+    pub const UPLOAD_FILE: &str = "upload/file/";
 }
 
 #[derive(Clone)]
@@ -211,8 +211,6 @@ pub struct Client {
 pub struct ClientInner {
     config: Config,
     client: HttpClient,
-    tree_progress: Arc<AggregatingProgressBar>,
-    file_progress: Arc<AggregatingProgressBar>,
 }
 
 pub struct ExpiringBool {
@@ -231,8 +229,8 @@ impl ExpiringBool {
     }
 
     fn set(&self) {
-        let t = std::time::Instant::now().duration_since(self.origin);
-        self.inner.store(t.as_secs() as i64, Ordering::Relaxed);
+        self.inner
+            .store(self.origin.elapsed().as_secs() as i64, Ordering::Relaxed);
     }
 
     pub fn get(&self) -> bool {
@@ -250,15 +248,10 @@ impl ExpiringBool {
 static LOG_SERVER_INFO_ONCE: Once = Once::new();
 
 impl Client {
-    /// Create an SaplingRemoteAPI client with the given configuration.
+    /// Create a SaplingRemoteAPI client with the given configuration.
     pub(crate) fn with_config(config: Config) -> Self {
         let client = http_client("edenapi", config.http_config.clone());
-        let inner = Arc::new(ClientInner {
-            config,
-            client,
-            tree_progress: AggregatingProgressBar::new("fetching", "trees"),
-            file_progress: AggregatingProgressBar::new("fetching", "files"),
-        });
+        let inner = Arc::new(ClientInner { config, client });
         Self { inner }
     }
 
@@ -286,13 +279,31 @@ impl Client {
         Ok(url)
     }
 
+    /// Build URL, POST, and deserialize a single response item.
+    async fn request_single<I, O>(&self, path: &str, data: I) -> Result<O, SaplingRemoteApiError>
+    where
+        I: ToWire,
+        <O as ToWire>::Wire: Send + DeserializeOwned + 'static,
+        O: ToWire + Send + 'static,
+    {
+        let url = self.build_url(path)?;
+        let request = self
+            .configure_request(path, self.inner.client.post(url))?
+            .cbor(&data.to_wire())
+            .map_err(SaplingRemoteApiError::RequestSerializationFailed)?;
+        self.fetch_single(request).await
+    }
+
     /// Add configured values to a request.
-    fn configure_request(&self, mut req: Request) -> Result<Request, SaplingRemoteApiError> {
-        // This method should probably not exist. Request
-        // configuration should flow through a shared config (i.e.
-        // http_client::Config) that is applied by the HttpClient.
-        // This way, every use of HttpClient does not its own http
-        // config and glue code to apply the config to the request.
+    fn configure_request(
+        &self,
+        base_path: &str,
+        mut req: Request,
+    ) -> Result<Request, SaplingRemoteApiError> {
+        // This method should probably not exist. Request configuration should flow
+        // through a shared config (i.e. http_client::Config) that is applied by the
+        // HttpClient. This way, every use of HttpClient does not need its own http config
+        // and glue code to apply the config to the request.
 
         let config = self.config();
 
@@ -300,8 +311,19 @@ impl Client {
             req.set_header(k, v);
         }
 
-        if let Some(timeout) = config.timeout {
+        let base_path = base_path.trim_matches('/');
+
+        // Prefer per-handler timeout, falling back to generic timeout.
+        if let Some(timeout) = config.handler_timeouts.get(base_path) {
+            tracing::trace!(?timeout, path = base_path, "using per-handler timeout");
+            req.set_timeout(*timeout);
+        } else if let Some(timeout) = config.timeout {
+            tracing::trace!(?timeout, path = base_path, "using generic timeout");
             req.set_timeout(timeout);
+        }
+
+        if let Some(timeout) = config.connect_timeout {
+            req.set_connect_timeout(timeout);
         }
 
         if let Some(http_version) = config.http_version {
@@ -312,7 +334,15 @@ impl Client {
             req.set_accept_encoding([encoding.clone()]);
         }
 
-        if let Some(mts) = &config.min_transfer_speed {
+        if let Some(mts) = config.handler_min_transfer_speeds.get(base_path) {
+            tracing::trace!(
+                ?mts,
+                path = base_path,
+                "using per-handler min transfer speed"
+            );
+            req.set_min_transfer_speed(*mts);
+        } else if let Some(mts) = &config.min_transfer_speed {
+            tracing::trace!(?mts, path = base_path, "using generic min transfer speed");
             req.set_min_transfer_speed(*mts);
         }
 
@@ -331,7 +361,7 @@ impl Client {
     /// a struct that will be CBOR-encoded and used as the request body.
     fn prepare_requests<T, K, F, R, G>(
         &self,
-        url: &Url,
+        base_path: &str,
         keys: K,
         batch_size: Option<usize>,
         min_batch_size: Option<usize>,
@@ -344,12 +374,13 @@ impl Client {
         G: FnMut(&Url, &Vec<T>) -> Url,
         R: ToWire,
     {
+        let url = self.build_url(base_path)?;
         split_into_batches(keys, batch_size, min_batch_size)
             .into_iter()
             .map(|keys| {
-                let url = mutate_url(url, &keys);
+                let url = mutate_url(&url, &keys);
                 let req = make_req(keys).to_wire();
-                self.configure_request(self.inner.client.post(url))?
+                self.configure_request(base_path, self.inner.client.post(url))?
                     .cbor(&req)
                     .map_err(SaplingRemoteApiError::RequestSerializationFailed)
             })
@@ -539,8 +570,6 @@ impl Client {
             return Ok(Response::empty());
         }
 
-        let url = self.build_url(paths::TREES)?;
-
         let mut attrs = attributes.clone().unwrap_or_default();
         // Inject augmented trees attribute if configured.
         attrs = TreeAttributes {
@@ -555,7 +584,7 @@ impl Client {
         let min_batch_size: Option<usize> = self.config().min_batch_size;
 
         let requests = self.prepare_requests(
-            &url,
+            paths::TREES,
             keys,
             self.config().max_trees_per_batch,
             min_batch_size,
@@ -591,12 +620,11 @@ impl Client {
 
         let guards = vec![FILES_ATTRS_INFLIGHT.entrance_guard(reqs.len())];
 
-        let url = self.build_url(paths::FILES2)?;
         let try_route_consistently = self.config().try_route_consistently;
         let min_batch_size: Option<usize> = self.config().min_batch_size;
 
         let requests = self.prepare_requests(
-            &url,
+            paths::FILES2,
             reqs,
             self.config().max_files_per_batch,
             min_batch_size,
@@ -627,8 +655,7 @@ impl Client {
         raw_content: Bytes,
         bubble_id: Option<NonZeroU64>,
     ) -> Result<UploadToken, SaplingRemoteApiError> {
-        let mut url = self.build_url(paths::UPLOAD)?;
-        url = url.join("file/")?;
+        let mut url = self.build_url(paths::UPLOAD_FILE)?;
         match item {
             AnyFileContentId::ContentId(id) => {
                 url = url.join("content_id/")?.join(&format!("{}", id))?;
@@ -652,11 +679,10 @@ impl Client {
             }
         }
 
-        let msg = format!("Requesting upload for {}", url);
-        tracing::info!("{}", &msg);
+        tracing::info!("Requesting upload for {url}");
 
         self.fetch_single::<UploadToken>({
-            self.configure_request(self.inner.client.put(url.clone()))?
+            self.configure_request(paths::UPLOAD_FILE, self.inner.client.put(url.clone()))?
                 .body(raw_content.to_vec())
         })
         .await
@@ -687,7 +713,7 @@ impl Client {
         // Currently, server sends the "upload_changesets" response once it is fully completed,
         // disable min speed transfer check to avoid premature termination of requests.
         let request = self
-            .configure_request(self.inner.client.post(url))?
+            .configure_request(paths::UPLOAD_CHANGESETS, self.inner.client.post(url))?
             .min_transfer_speed(None)
             .cbor(&req)
             .map_err(SaplingRemoteApiError::RequestSerializationFailed)?;
@@ -715,7 +741,10 @@ impl Client {
         // Currently, server sends the "upload_changesets" response once it is fully completed,
         // disable min speed transfer check to avoid premature termination of requests.
         let request = self
-            .configure_request(self.inner.client.post(url))?
+            .configure_request(
+                paths::UPLOAD_IDENTICAL_CHANGESET,
+                self.inner.client.post(url),
+            )?
             .min_transfer_speed(None)
             .cbor(&req)
             .map_err(SaplingRemoteApiError::RequestSerializationFailed)?;
@@ -735,7 +764,7 @@ impl Client {
         self.log_request(&commit_revlog_data_req, "commit_revlog_data");
 
         let req = self
-            .configure_request(self.inner.client.post(url))?
+            .configure_request(paths::COMMIT_REVLOG_DATA, self.inner.client.post(url))?
             .cbor(&commit_revlog_data_req)
             .map_err(SaplingRemoteApiError::RequestSerializationFailed)?;
 
@@ -757,7 +786,10 @@ impl Client {
         let req = UploadBonsaiChangesetRequest { changeset }.to_wire();
 
         let request = self
-            .configure_request(self.inner.client.post(url.clone()))?
+            .configure_request(
+                paths::UPLOAD_BONSAI_CHANGESET,
+                self.inner.client.post(url.clone()),
+            )?
             .cbor(&req)
             .map_err(SaplingRemoteApiError::RequestSerializationFailed)?;
 
@@ -777,7 +809,7 @@ impl Client {
         }
         .to_wire();
         let request = self
-            .configure_request(self.inner.client.post(url))?
+            .configure_request(paths::EPHEMERAL_PREPARE, self.inner.client.post(url))?
             .cbor(&req)
             .map_err(SaplingRemoteApiError::RequestSerializationFailed)?;
 
@@ -796,7 +828,7 @@ impl Client {
         let url = self.build_url(paths::FETCH_SNAPSHOT)?;
         let req = request.to_wire();
         let request = self
-            .configure_request(self.inner.client.post(url))?
+            .configure_request(paths::FETCH_SNAPSHOT, self.inner.client.post(url))?
             .cbor(&req)
             .map_err(SaplingRemoteApiError::RequestSerializationFailed)?;
 
@@ -812,7 +844,7 @@ impl Client {
         let url = self.build_url(paths::ALTER_SNAPSHOT)?;
         let req = request.to_wire();
         let request = self
-            .configure_request(self.inner.client.post(url))?
+            .configure_request(paths::ALTER_SNAPSHOT, self.inner.client.post(url))?
             .cbor(&req)
             .map_err(SaplingRemoteApiError::RequestSerializationFailed)?;
 
@@ -830,13 +862,11 @@ impl Client {
             return Ok(Response::empty());
         }
 
-        let url = self.build_url(paths::HISTORY)?;
-
         let try_route_consistently = self.config().try_route_consistently;
         let min_batch_size: Option<usize> = self.config().min_batch_size;
 
         let requests = self.prepare_requests(
-            &url,
+            paths::HISTORY,
             keys,
             self.config().max_history_per_batch,
             min_batch_size,
@@ -875,9 +905,8 @@ impl Client {
             return Ok(Response::empty());
         }
 
-        let url = self.build_url(paths::BLAME)?;
         let requests = self.prepare_requests(
-            &url,
+            paths::BLAME,
             files,
             Some(MAX_CONCURRENT_BLAMES_PER_REQUEST),
             None,
@@ -916,7 +945,7 @@ impl Client {
         };
 
         let requests = self
-            .configure_request(self.inner.client.post(url))?
+            .configure_request(paths::SUFFIXQUERY, self.inner.client.post(url))?
             .cbor(&req.to_wire())
             .map_err(SaplingRemoteApiError::RequestSerializationFailed)?;
 
@@ -935,9 +964,8 @@ impl Client {
             commits.len(),
             scheme
         );
-        let url = self.build_url(paths::COMMIT_TRANSLATE_ID)?;
         let requests = self.prepare_requests(
-            &url,
+            paths::COMMIT_TRANSLATE_ID,
             commits,
             self.config().max_commit_translate_id_per_batch,
             None,
@@ -965,7 +993,7 @@ impl Client {
         let metadata = token.data.metadata.clone();
         let req = token.to_wire();
         let request = self
-            .configure_request(self.inner.client.post(url.clone()))?
+            .configure_request(paths::DOWNLOAD_FILE, self.inner.client.post(url.clone()))?
             .cbor(&req)
             .map_err(SaplingRemoteApiError::RequestSerializationFailed)?;
 
@@ -1006,7 +1034,7 @@ impl Client {
         };
         self.log_request(&set_bookmark_req, "set_bookmark");
         let req = self
-            .configure_request(self.inner.client.post(url))?
+            .configure_request(paths::SET_BOOKMARK, self.inner.client.post(url))?
             .min_transfer_speed(None)
             .cbor(&set_bookmark_req.to_wire())
             .map_err(SaplingRemoteApiError::RequestSerializationFailed)?;
@@ -1045,7 +1073,7 @@ impl Client {
         // Currently, server sends the land_stack response once it is fully completed,
         // disable min speed transfer check to avoid premature termination of requests.
         let req = self
-            .configure_request(self.inner.client.post(url))?
+            .configure_request(paths::LAND_STACK, self.inner.client.post(url))?
             .min_transfer_speed(None)
             .cbor(&land_stack_req.to_wire())
             .map_err(SaplingRemoteApiError::RequestSerializationFailed)?;
@@ -1063,9 +1091,8 @@ impl Client {
             return Ok(Response::empty());
         }
 
-        let url = self.build_url(paths::UPLOAD_FILENODES)?;
         let requests = self.prepare_requests(
-            &url,
+            paths::UPLOAD_FILENODES,
             items,
             Some(MAX_CONCURRENT_UPLOAD_FILENODES_PER_REQUEST),
             None,
@@ -1090,9 +1117,8 @@ impl Client {
             return Ok(Response::empty());
         }
 
-        let url = self.build_url(paths::UPLOAD_TREES)?;
         let requests = self.prepare_requests(
-            &url,
+            paths::UPLOAD_TREES,
             items,
             Some(MAX_CONCURRENT_UPLOAD_TREES_PER_REQUEST),
             None,
@@ -1122,17 +1148,14 @@ impl Client {
         reponame: String,
     ) -> Result<WorkspaceDataResponse, SaplingRemoteApiError> {
         tracing::info!("Requesting workspace {} in repo {} ", workspace, reponame);
-        let url = self.build_url(paths::CLOUD_WORKSPACE)?;
-        let workspace_req = CloudWorkspaceRequest {
-            workspace: workspace.to_string(),
-            reponame: reponame.to_string(),
-        };
-        let request = self
-            .configure_request(self.inner.client.post(url))?
-            .cbor(&workspace_req.to_wire())
-            .map_err(SaplingRemoteApiError::RequestSerializationFailed)?;
-
-        self.fetch_single::<WorkspaceDataResponse>(request).await
+        self.request_single(
+            paths::CLOUD_WORKSPACE,
+            CloudWorkspaceRequest {
+                workspace: workspace.to_string(),
+                reponame: reponame.to_string(),
+            },
+        )
+        .await
     }
 
     async fn cloud_workspaces_attempt(
@@ -1145,17 +1168,14 @@ impl Client {
             prefix,
             reponame
         );
-        let url = self.build_url(paths::CLOUD_WORKSPACES)?;
-        let workspace_req = CloudWorkspacesRequest {
-            prefix: prefix.to_string(),
-            reponame: reponame.to_string(),
-        };
-        let request = self
-            .configure_request(self.inner.client.post(url))?
-            .cbor(&workspace_req.to_wire())
-            .map_err(SaplingRemoteApiError::RequestSerializationFailed)?;
-
-        self.fetch_single::<WorkspacesDataResponse>(request).await
+        self.request_single(
+            paths::CLOUD_WORKSPACES,
+            CloudWorkspacesRequest {
+                prefix: prefix.to_string(),
+                reponame: reponame.to_string(),
+            },
+        )
+        .await
     }
 
     async fn cloud_references_attempt(
@@ -1167,13 +1187,7 @@ impl Client {
             data.workspace,
             data.reponame
         );
-        let url = self.build_url(paths::CLOUD_REFERENCES)?;
-        let request = self
-            .configure_request(self.inner.client.post(url))?
-            .cbor(&data.to_wire())
-            .map_err(SaplingRemoteApiError::RequestSerializationFailed)?;
-
-        self.fetch_single::<ReferencesDataResponse>(request).await
+        self.request_single(paths::CLOUD_REFERENCES, data).await
     }
 
     async fn cloud_update_references_attempt(
@@ -1185,13 +1199,8 @@ impl Client {
             data.workspace,
             data.reponame
         );
-        let url = self.build_url(paths::CLOUD_UPDATE_REFERENCES)?;
-        let request = self
-            .configure_request(self.inner.client.post(url))?
-            .cbor(&data.to_wire())
-            .map_err(SaplingRemoteApiError::RequestSerializationFailed)?;
-
-        self.fetch_single::<ReferencesDataResponse>(request).await
+        self.request_single(paths::CLOUD_UPDATE_REFERENCES, data)
+            .await
     }
 
     async fn cloud_smartlog_attempt(
@@ -1203,13 +1212,7 @@ impl Client {
             data.workspace,
             data.reponame
         );
-        let url = self.build_url(paths::CLOUD_SMARTLOG)?;
-        let request = self
-            .configure_request(self.inner.client.post(url))?
-            .cbor(&data.to_wire())
-            .map_err(SaplingRemoteApiError::RequestSerializationFailed)?;
-
-        self.fetch_single::<SmartlogDataResponse>(request).await
+        self.request_single(paths::CLOUD_SMARTLOG, data).await
     }
 
     async fn cloud_share_workspace_attempt(
@@ -1221,13 +1224,7 @@ impl Client {
             data.workspace,
             data.reponame
         );
-        let url = self.build_url(paths::CLOUD_SHARE_WORKSPACE)?;
-        let request = self
-            .configure_request(self.inner.client.post(url))?
-            .cbor(&data.to_wire())
-            .map_err(SaplingRemoteApiError::RequestSerializationFailed)?;
-
-        self.fetch_single::<CloudShareWorkspaceResponse>(request)
+        self.request_single(paths::CLOUD_SHARE_WORKSPACE, data)
             .await
     }
 
@@ -1240,13 +1237,7 @@ impl Client {
             data.workspace,
             data.reponame
         );
-        let url = self.build_url(paths::CLOUD_UPDATE_ARCHIVE)?;
-        let request = self
-            .configure_request(self.inner.client.post(url))?
-            .cbor(&data.to_wire())
-            .map_err(SaplingRemoteApiError::RequestSerializationFailed)?;
-
-        self.fetch_single::<UpdateArchiveResponse>(request).await
+        self.request_single(paths::CLOUD_UPDATE_ARCHIVE, data).await
     }
 
     async fn cloud_rename_workspace_attempt(
@@ -1258,13 +1249,8 @@ impl Client {
             data.workspace,
             data.reponame
         );
-        let url = self.build_url(paths::CLOUD_RENAME_WORKSPACE)?;
-        let request = self
-            .configure_request(self.inner.client.post(url))?
-            .cbor(&data.to_wire())
-            .map_err(SaplingRemoteApiError::RequestSerializationFailed)?;
-
-        self.fetch_single::<RenameWorkspaceResponse>(request).await
+        self.request_single(paths::CLOUD_RENAME_WORKSPACE, data)
+            .await
     }
 
     async fn cloud_smartlog_by_version_attempt(
@@ -1276,13 +1262,8 @@ impl Client {
             data.workspace,
             data.reponame
         );
-        let url = self.build_url(paths::CLOUD_SMARTLOG_BY_VERSION)?;
-        let request = self
-            .configure_request(self.inner.client.post(url))?
-            .cbor(&data.to_wire())
-            .map_err(SaplingRemoteApiError::RequestSerializationFailed)?;
-
-        self.fetch_single::<SmartlogDataResponse>(request).await
+        self.request_single(paths::CLOUD_SMARTLOG_BY_VERSION, data)
+            .await
     }
 
     async fn cloud_historical_versions_attempt(
@@ -1294,13 +1275,7 @@ impl Client {
             data.workspace,
             data.reponame
         );
-        let url = self.build_url(paths::CLOUD_HISTORICAL_VERSIONS)?;
-        let request = self
-            .configure_request(self.inner.client.post(url))?
-            .cbor(&data.to_wire())
-            .map_err(SaplingRemoteApiError::RequestSerializationFailed)?;
-
-        self.fetch_single::<HistoricalVersionsResponse>(request)
+        self.request_single(paths::CLOUD_HISTORICAL_VERSIONS, data)
             .await
     }
 
@@ -1313,13 +1288,7 @@ impl Client {
             data.workspace,
             data.reponame
         );
-        let url = self.build_url(paths::CLOUD_ROLLBACK_WORKSPACE)?;
-        let request = self
-            .configure_request(self.inner.client.post(url))?
-            .cbor(&data.to_wire())
-            .map_err(SaplingRemoteApiError::RequestSerializationFailed)?;
-
-        self.fetch_single::<RollbackWorkspaceResponse>(request)
+        self.request_single(paths::CLOUD_ROLLBACK_WORKSPACE, data)
             .await
     }
 }
@@ -1337,7 +1306,8 @@ impl SaplingRemoteApi for Client {
 
                 tracing::info!("Sending health check request: {}", &url);
 
-                let req = client.configure_request(client.inner.client.get(url))?;
+                let req =
+                    client.configure_request(paths::HEALTH_CHECK, client.inner.client.get(url))?;
                 let res = raise_for_status(req.send_async().await?).await?;
 
                 Ok(ResponseMeta::from(&res))
@@ -1351,8 +1321,9 @@ impl SaplingRemoteApi for Client {
         self.with_retry(|client| {
             async {
                 tracing::info!("Requesting capabilities for repo {}", &client.repo_name());
-                let url = client.build_url("capabilities")?;
-                let req = client.configure_request(client.inner.client.get(url))?;
+                let url = client.build_url(paths::CAPABILITIES)?;
+                let req =
+                    client.configure_request(paths::CAPABILITIES, client.inner.client.get(url))?;
                 let res = raise_for_status(req.send_async().await?).await?;
                 let body: Vec<u8> = res.into_body().decoded().try_concat().await?;
                 let caps = serde_json::from_slice(&body)
@@ -1368,16 +1339,9 @@ impl SaplingRemoteApi for Client {
         &self,
         reqs: Vec<FileSpec>,
     ) -> Result<Response<FileResponse>, SaplingRemoteApiError> {
-        let prog = self.inner.file_progress.create_or_extend(reqs.len() as u64);
-
         RetryableFileAttrs::new(reqs)
             .perform_with_retries(self.clone())
-            .and_then(|r| async {
-                Ok(r.then(move |r| {
-                    prog.increase_position(1);
-                    ready(r)
-                }))
-            })
+            .and_then(|r| async { Ok(r.then(move |r| ready(r))) })
             .await
     }
 
@@ -1396,16 +1360,9 @@ impl SaplingRemoteApi for Client {
         attributes: Option<TreeAttributes>,
     ) -> Result<Response<Result<TreeEntry, SaplingRemoteApiServerError>>, SaplingRemoteApiError>
     {
-        let prog = self.inner.tree_progress.create_or_extend(keys.len() as u64);
-
         RetryableTrees::new(keys, attributes)
             .perform_with_retries(self.clone())
-            .and_then(|r| async {
-                Ok(r.then(move |r| {
-                    prog.increase_position(1);
-                    ready(r)
-                }))
-            })
+            .and_then(|r| async { Ok(r.then(move |r| ready(r))) })
             .await
     }
 
@@ -1422,13 +1379,12 @@ impl SaplingRemoteApi for Client {
         prefixes: Vec<String>,
     ) -> Result<Vec<CommitHashLookupResponse>, SaplingRemoteApiError> {
         tracing::info!("Requesting full hashes for {} prefix(es)", prefixes.len());
-        let url = self.build_url(paths::COMMIT_HASH_LOOKUP)?;
         let prefixes: Vec<CommitHashLookupRequest> = prefixes
             .into_iter()
             .map(make_hash_lookup_request)
             .collect::<Result<Vec<CommitHashLookupRequest>, _>>()?;
         let requests = self.prepare_requests(
-            &url,
+            paths::COMMIT_HASH_LOOKUP,
             prefixes,
             Some(MAX_CONCURRENT_HASH_LOOKUPS_PER_REQUEST),
             None,
@@ -1450,7 +1406,7 @@ impl SaplingRemoteApi for Client {
         self.log_request(&bookmark_req, "bookmarks");
         let bookmarks_wire = bookmark_req.to_wire();
         let req = self
-            .configure_request(self.inner.client.post(url))?
+            .configure_request(paths::BOOKMARKS, self.inner.client.post(url))?
             .cbor(&bookmarks_wire)
             .map_err(SaplingRemoteApiError::RequestSerializationFailed)?;
 
@@ -1482,7 +1438,7 @@ impl SaplingRemoteApi for Client {
         self.log_request(&bookmark_req, "bookmarks2");
         let bookmarks_wire = bookmark_req.to_wire();
         let req = self
-            .configure_request(self.inner.client.post(url))?
+            .configure_request(paths::BOOKMARKS2, self.inner.client.post(url))?
             .cbor(&bookmarks_wire)
             .map_err(SaplingRemoteApiError::RequestSerializationFailed)?;
 
@@ -1540,10 +1496,8 @@ impl SaplingRemoteApi for Client {
             return Ok(Vec::new());
         }
 
-        let url = self.build_url(paths::COMMIT_LOCATION_TO_HASH)?;
-
         let formatted = self.prepare_requests(
-            &url,
+            paths::COMMIT_LOCATION_TO_HASH,
             requests,
             self.config().max_location_to_hash_per_batch,
             None,
@@ -1573,10 +1527,8 @@ impl SaplingRemoteApi for Client {
             return Ok(Vec::new());
         }
 
-        let url = self.build_url(paths::COMMIT_HASH_TO_LOCATION)?;
-
         let formatted = self.prepare_requests(
-            &url,
+            paths::COMMIT_HASH_TO_LOCATION,
             hgids,
             self.config().max_location_to_hash_per_batch,
             None,
@@ -1656,7 +1608,7 @@ impl SaplingRemoteApi for Client {
         // Since we have a special progress bar and response is small, let's disable compression of
         // response's body.
         let req = self
-            .configure_request(self.inner.client.post(url))?
+            .configure_request(paths::COMMIT_GRAPH_V2, self.inner.client.post(url))?
             .accept_encoding([Encoding::Identity])
             .min_transfer_speed(None)
             .cbor(&wire_graph_req)
@@ -1683,7 +1635,7 @@ impl SaplingRemoteApi for Client {
         let wire_graph_req = graph_req.to_wire();
 
         let req = self
-            .configure_request(self.inner.client.post(url))?
+            .configure_request(paths::COMMIT_GRAPH_SEGMENTS, self.inner.client.post(url))?
             .min_transfer_speed(None)
             .cbor(&wire_graph_req)
             .map_err(SaplingRemoteApiError::RequestSerializationFailed)?;
@@ -1704,9 +1656,8 @@ impl SaplingRemoteApi for Client {
             return Ok(Vec::new());
         }
 
-        let url = self.build_url(paths::LOOKUP)?;
         let requests = self.prepare_requests(
-            &url,
+            paths::LOOKUP,
             items,
             Some(MAX_CONCURRENT_LOOKUPS_PER_REQUEST),
             None,
@@ -1755,11 +1706,10 @@ impl SaplingRemoteApi for Client {
             }
         }
 
-        let msg = format!(
+        tracing::info!(
             "Received {} token(s) from the lookup_batch request",
             uploaded_tokens.len()
         );
-        tracing::info!("{}", &msg);
 
         // Upload the rest of the contents in parallel
         let new_tokens = stream::iter(
@@ -1782,11 +1732,10 @@ impl SaplingRemoteApi for Client {
         .collect::<Vec<_>>()
         .await;
 
-        let msg = format!(
+        tracing::info!(
             "Received {} new token(s) from upload requests",
             new_tokens.iter().filter(|x| x.is_ok()).count()
         );
-        tracing::info!("{}", &msg);
 
         // Merge all the tokens together
         let all_tokens = new_tokens
@@ -1890,9 +1839,8 @@ impl SaplingRemoteApi for Client {
         commits: Vec<HgId>,
     ) -> Result<Vec<CommitMutationsResponse>, SaplingRemoteApiError> {
         tracing::info!("Requesting mutation info for {} commit(s)", commits.len());
-        let url = self.build_url(paths::COMMIT_MUTATIONS)?;
         let requests = self.prepare_requests(
-            &url,
+            paths::COMMIT_MUTATIONS,
             commits,
             self.config().max_commit_mutations_per_batch,
             None,

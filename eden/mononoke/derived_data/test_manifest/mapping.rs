@@ -5,6 +5,8 @@
  * GNU General Public License version 2.
  */
 
+use std::collections::HashMap;
+
 use anyhow::anyhow;
 use anyhow::Error;
 use anyhow::Result;
@@ -71,8 +73,9 @@ impl BonsaiDerivable for RootTestManifestDirectory {
         derivation_ctx: &DerivationContext,
         bonsai: BonsaiChangeset,
         parents: Vec<Self>,
+        known: Option<&HashMap<ChangesetId, Self>>,
     ) -> Result<Self> {
-        derive_single(ctx, derivation_ctx, bonsai, parents).await
+        derive_single(ctx, derivation_ctx, bonsai, parents, known).await
     }
 
     async fn store_mapping(

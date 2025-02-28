@@ -1,6 +1,7 @@
   $ setconfig diff.git=True
   $ setconfig subtree.cheap-copy=False
   $ setconfig subtree.allow-any-source-commit=True
+  $ setconfig subtree.min-path-depth=1
 
 setup backing repo
 
@@ -27,6 +28,20 @@ test subtree merge path validation
   [255]
   $ hg subtree merge --from-path foo --to-path foo/bar
   abort: overlapping --from-path 'foo' and --to-path 'foo/bar'
+  [255]
+
+test subtree merge max file count
+  $ newclientrepo
+  $ drawdag <<'EOS'
+  >   D  # D/foo/y = 111\n
+  >   |
+  > B C  # B/foo/x = 1a\n2\n3\n
+  > |/   # C/foo/x = 1\n2\n3a\n
+  > A    # A/foo/x = 1\n2\n3\n
+  > EOS
+  $ hg go -q $B
+  $ hg subtree merge --from-path foo --to-path foo --rev $D --config subtree.max-file-count=1
+  abort: subtree path 'foo' includes too many files: 2 (max: 1)
   [255]
 
 test subtree merge from copy source -> copy dest

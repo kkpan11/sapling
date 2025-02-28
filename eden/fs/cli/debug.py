@@ -828,6 +828,23 @@ class CompactLocalStorageCmd(Subcmd):
         return 0
 
 
+@debug_cmd("subscribe", "Subscribes to journal changes. Responses are in JSON format")
+class SubscribeCmd(Subcmd):
+    def setup_parser(self, parser: argparse.ArgumentParser) -> None:
+        parser.add_argument(
+            "mount_point",
+            nargs="?",
+            help="The path to an EdenFS mount point. Uses `pwd` by default.",
+        )
+        parser.add_argument(
+            "--throttle",
+            help="Number of milliseconds to wait between events.",
+        )
+
+    def run(self, args: argparse.Namespace) -> int:
+        raise NotImplementedError("Stub -- only implemented in Rust")
+
+
 @debug_cmd("hg_copy_map_get_all", "Copymap for dirstate")
 class HgCopyMapGetAllCmd(Subcmd):
     def setup_parser(self, parser: argparse.ArgumentParser) -> None:
@@ -941,8 +958,9 @@ class InodeCmd(Subcmd):
         )
         parser.add_argument(
             "--recursive",
+            action="store_true",
             default=False,
-            help="Recursively walk the directory and report data on all of the subdirectories recursively.",
+            help="Report data on all subdirectories recursively.",
         )
 
     def run(self, args: argparse.Namespace) -> int:
@@ -1201,6 +1219,9 @@ def _print_inode_info(inode_info: TreeInodeDebugInfo, out: IO[bytes]) -> None:
     out.write(b"  Ref count:     %d\n" % inode_info.refcount)
     out.write(b"  Materialized?: %s\n" % str(inode_info.materialized).encode())
     out.write(b"  Object ID:     %s\n" % object_id_str(inode_info.treeHash).encode())
+    out.write(
+        b"\nEntries have the following columns: INODE_NUM FILE_TYPE PERMISSIONS_OCTAL LOADED? [OBJECT_ID] PATH\n"
+    )
     out.write(b"  Entries (%d total):\n" % len(inode_info.entries))
 
     max_object_id_len = max(
@@ -1213,6 +1234,7 @@ def _print_inode_info(inode_info: TreeInodeDebugInfo, out: IO[bytes]) -> None:
         else:
             loaded_flag = "-"
 
+        # Please update the column description string above if you change the format
         file_type_str, perms = _parse_mode(entry.mode)
         line = "    {:9} {} {:4o} {} {:<{}} {}\n".format(
             entry.inodeNumber,

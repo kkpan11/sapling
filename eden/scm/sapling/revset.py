@@ -13,6 +13,7 @@
 from __future__ import absolute_import
 
 import re
+import sys
 import time
 
 from . import (
@@ -28,7 +29,6 @@ from . import (
     node,
     pathutil,
     phases,
-    pycompat,
     registrar,
     revsetlang,
     scmutil,
@@ -179,7 +179,7 @@ def _warnrevnum(ui, x):
         # another table.
         ui.log(
             "features",
-            fullargs=repr(pycompat.sysargv),
+            fullargs=repr(sys.argv),
             feature="revnum",
             traceback=util.smarttraceback(),
         )
@@ -1183,9 +1183,7 @@ def filelog(repo, subset, x):
                 scanpos = None
                 for r in cl.revs(start):
                     # minimize parsing of non-matching entries
-                    if pycompat.encodeutf8(f) in cl.revision(r) and f in cl.readfiles(
-                        r
-                    ):
+                    if f.encode() in cl.revision(r) and f in cl.readfiles(r):
                         try:
                             # try to use manifest delta fastpath
                             n = repo[r].filenode(f)
@@ -1456,13 +1454,12 @@ def keyword(repo, subset, x):
     ``grep(regex)``.
     """
     # i18n: "keyword" is a keyword
-    kw = encoding.lower(getstring(x, _("keyword requires a string")))
+    kw = getstring(x, _("keyword requires a string")).lower()
 
     def matches(r):
         c = repo[r]
         return any(
-            kw in encoding.lower(t)
-            for t in list(c.files()) + [c.user(), c.description()]
+            kw in t.lower() for t in list(c.files()) + [c.user(), c.description()]
         )
 
     return subset.prefetch("text").filter(matches, condrepr=("<keyword %r>", kw))
@@ -2376,8 +2373,8 @@ def _substringmatcher(pattern, casesensitive=True):
     kind, pattern, matcher = util.stringmatcher(pattern, casesensitive=casesensitive)
     if kind == "literal":
         if not casesensitive:
-            pattern = encoding.lower(pattern)
-            matcher = lambda s: pattern in encoding.lower(s)
+            pattern = pattern.lower()
+            matcher = lambda s: pattern in s.lower()
         else:
             matcher = lambda s: pattern in s
     return kind, pattern, matcher

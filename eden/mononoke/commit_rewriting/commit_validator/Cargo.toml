@@ -13,7 +13,7 @@ blobstore = { version = "0.1.0", path = "../../blobstore" }
 blobstore_factory = { version = "0.1.0", path = "../../blobstore/factory" }
 bookmarks = { version = "0.1.0", path = "../../bookmarks" }
 borrowed = { version = "0.1.0", git = "https://github.com/facebookexperimental/rust-shed.git", branch = "main" }
-clap = { version = "4.5.20", features = ["derive", "env", "string", "unicode", "wrap_help"] }
+clap = { version = "4.5.30", features = ["derive", "env", "string", "unicode", "wrap_help"] }
 cloned = { version = "0.1.0", git = "https://github.com/facebookexperimental/rust-shed.git", branch = "main" }
 commit_graph = { version = "0.1.0", path = "../../repo_attributes/commit_graph/commit_graph" }
 context = { version = "0.1.0", path = "../../server/context" }
@@ -29,6 +29,7 @@ mercurial_types = { version = "0.1.0", path = "../../mercurial/types" }
 metaconfig_types = { version = "0.1.0", path = "../../metaconfig/types" }
 metadata = { version = "0.1.0", path = "../../server/metadata" }
 mononoke_app = { version = "0.1.0", path = "../../cmdlib/mononoke_app" }
+mononoke_macros = { version = "0.1.0", path = "../../mononoke_macros" }
 mononoke_types = { version = "0.1.0", path = "../../mononoke_types" }
 movers = { version = "0.1.0", path = "../movers" }
 mutable_counters = { version = "0.1.0", path = "../../mutable_counters" }
@@ -39,7 +40,7 @@ repo_derived_data = { version = "0.1.0", path = "../../repo_attributes/repo_deri
 repo_identity = { version = "0.1.0", path = "../../repo_attributes/repo_identity" }
 sapling-clientinfo = { version = "0.1.0", path = "../../../scm/lib/clientinfo" }
 scuba_ext = { version = "0.1.0", path = "../../common/scuba_ext" }
-slog = { version = "2.7", features = ["max_level_trace", "nested-values"] }
+slog = { package = "tracing_slog_compat", version = "0.1.0", git = "https://github.com/facebookexperimental/rust-shed.git", branch = "main" }
 sql_construct = { version = "0.1.0", path = "../../common/sql_construct" }
 sql_ext = { version = "0.1.0", path = "../../common/rust/sql_ext" }
 sql_query_config = { version = "0.1.0", path = "../../repo_attributes/sql_query_config" }
@@ -50,5 +51,4 @@ tokio = { version = "1.41.0", features = ["full", "test-util", "tracing"] }
 [dev-dependencies]
 cross_repo_sync_test_utils = { version = "0.1.0", path = "../cross_repo_sync/test_utils" }
 maplit = "1.0"
-mononoke_macros = { version = "0.1.0", path = "../../mononoke_macros" }
 tests_utils = { version = "0.1.0", path = "../../tests/utils" }

@@ -47,8 +47,6 @@ import weakref
 
 from sapling import extensions, registrar, ui as uimod, util
 from sapling.node import hex
-from sapling.pycompat import encodeutf8, range
-
 
 # Note for extension authors: ONLY specify testedwith = 'ships-with-hg-core' for
 # extensions which SHIP WITH MERCURIAL. Non-mainline extensions should
@@ -204,7 +202,7 @@ def wrapui(ui) -> None:
                     line = fmt % args
                     if not line.endswith("\n"):
                         line += "\n"
-                    fp.write(encodeutf8(line))
+                    fp.write(line.encode())
             except (IOError, OSError) as err:
                 self.debug("warning: cannot write to blackbox.log: %s\n" % err.strerror)
                 # do not restore _bbinlog intentionally to avoid failed

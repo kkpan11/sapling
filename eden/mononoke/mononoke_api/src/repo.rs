@@ -95,6 +95,8 @@ use git_types::MappedGitCommitId;
 use hook_manager::manager::HookManager;
 use hook_manager::manager::HookManagerArc;
 use itertools::Itertools;
+#[cfg(fbcode_build)]
+use lazy_static::lazy_static;
 use live_commit_sync_config::LiveCommitSyncConfig;
 use mercurial_derivation::MappedHgChangesetId;
 use mercurial_mutation::HgMutationStore;
@@ -137,6 +139,7 @@ use repo_sparse_profiles::RepoSparseProfilesArc;
 use repo_stats_logger::RepoStatsLogger;
 use slog::debug;
 use slog::error;
+use sql_commit_graph_storage::CommitGraphBulkFetcher;
 use sql_query_config::SqlQueryConfig;
 use stats::prelude::*;
 use streaming_clone::StreamingClone;
@@ -146,6 +149,12 @@ use unbundle::PushRedirectorArgs;
 use wireproto_handler::PushRedirectorBase;
 use wireproto_handler::RepoHandlerBase;
 use wireproto_handler::RepoHandlerBaseRef;
+#[cfg(fbcode_build)]
+use MononokeApiStats_ods3::Instrument_MononokeApiStats;
+#[cfg(fbcode_build)]
+use MononokeApiStats_ods3_types::MononokeApiEvent;
+#[cfg(fbcode_build)]
+use MononokeApiStats_ods3_types::MononokeApiStats;
 
 use crate::changeset::ChangesetContext;
 use crate::errors::MononokeError;
@@ -170,6 +179,12 @@ pub mod move_bookmark;
 pub mod update_submodule_expansion;
 
 pub use git::upload_non_blob_git_object;
+
+#[cfg(fbcode_build)]
+lazy_static! {
+    static ref API_STATS_INSTRUMENT: Instrument_MononokeApiStats =
+        Instrument_MononokeApiStats::new();
+}
 
 define_stats! {
     prefix = "mononoke.api";
@@ -300,6 +315,9 @@ pub struct Repo {
 
     #[facet]
     pub repo_stats_logger: RepoStatsLogger,
+
+    #[facet]
+    pub commit_graph_bulk_fetcher: CommitGraphBulkFetcher,
 }
 
 pub trait MononokeRepo = RepoLike + RepoWithBubble + Clone + 'static;
@@ -503,6 +521,16 @@ fn report_bookmark_missing_from_cache(
         1,
         (repo.repo_identity().id(), bookmark.to_string()),
     );
+
+    #[cfg(fbcode_build)]
+    API_STATS_INSTRUMENT.observe(MononokeApiStats {
+        repo: Some(repo.repo_identity().name().to_string()),
+        repoid: Some(repo.repo_identity().id().id()),
+        bookmark: Some(bookmark.to_string()),
+        event: Some(MononokeApiEvent::BookmarkNotInCache),
+        count: Some(1.0),
+        ..Default::default()
+    });
 }
 
 fn report_bookmark_missing_from_repo(
@@ -520,6 +548,16 @@ fn report_bookmark_missing_from_repo(
         1,
         (repo.repo_identity().id(), bookmark.to_string()),
     );
+
+    #[cfg(fbcode_build)]
+    API_STATS_INSTRUMENT.observe(MononokeApiStats {
+        repo: Some(repo.repo_identity().name().to_string()),
+        repoid: Some(repo.repo_identity().id().id()),
+        bookmark: Some(bookmark.to_string()),
+        event: Some(MononokeApiEvent::BookmarkNotInRepo),
+        count: Some(1.0),
+        ..Default::default()
+    });
 }
 
 fn report_bookmark_staleness(
@@ -544,6 +582,16 @@ fn report_bookmark_staleness(
         staleness,
         (repo.repo_identity().id(), bookmark.to_string()),
     );
+
+    #[cfg(fbcode_build)]
+    API_STATS_INSTRUMENT.observe(MononokeApiStats {
+        repo: Some(repo.repo_identity().name().to_string()),
+        repoid: Some(repo.repo_identity().id().id()),
+        bookmark: Some(bookmark.to_string()),
+        event: Some(MononokeApiEvent::BookmarkStale),
+        count: Some(1.0),
+        ..Default::default()
+    });
 }
 
 async fn report_bookmark_age_difference(
@@ -1617,11 +1665,8 @@ impl<R: MononokeRepo> RepoContext<R> {
             MononokeError::InvalidRequest(format!("unknown commit specifier {}", specifier))
         })?;
 
-        let commit_syncer = CommitSyncer::new(
-            &self.ctx,
-            commit_sync_repos.into(),
-            self.live_commit_sync_config(),
-        );
+        let commit_syncer =
+            CommitSyncer::new(&self.ctx, commit_sync_repos, self.live_commit_sync_config());
 
         if sync_behaviour == XRepoLookupSyncBehaviour::SyncIfAbsent {
             let _ = commit_syncer
@@ -1674,10 +1719,9 @@ impl<R: MononokeRepo> RepoContext<R> {
 
     /// Reads a value out of the underlying config, indicating if we support writes without parents in this repo.
     pub fn allow_no_parent_writes(&self) -> bool {
-        return self
-            .config()
+        self.config()
             .source_control_service
-            .permit_commits_without_parents;
+            .permit_commits_without_parents
     }
 
     /// A SegmentedChangelog client repository has a compressed shape of the commit graph but

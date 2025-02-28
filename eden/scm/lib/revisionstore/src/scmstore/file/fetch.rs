@@ -25,7 +25,7 @@ use edenapi_types::FileSpec;
 use futures::StreamExt;
 use futures::TryFutureExt;
 use minibytes::Bytes;
-use progress_model::AggregatingProgressBar;
+use progress_model::ProgressBar;
 use storemodel::SerializationFormat;
 use tracing::debug;
 use tracing::field;
@@ -34,6 +34,7 @@ use types::fetch_mode::FetchMode;
 use types::CasDigest;
 use types::CasDigestType;
 use types::CasFetchedStats;
+use types::Id20;
 use types::Key;
 use types::Sha256;
 
@@ -73,8 +74,6 @@ pub struct FetchState {
     /// LFS pointers we've discovered corresponding to a request Key.
     lfs_pointers: HashMap<Key, (LfsPointersEntry, bool)>,
 
-    lfs_progress: Arc<AggregatingProgressBar>,
-
     /// Track fetch metrics,
     metrics: &'static FileStoreFetchMetrics,
 
@@ -99,16 +98,16 @@ impl FetchState {
         lfs_enabled: bool,
         fetch_mode: FetchMode,
         cas_cache_threshold_bytes: Option<u64>,
+        bar: Arc<ProgressBar>,
     ) -> Self {
         FetchState {
-            common: CommonFetchState::new(keys, attrs, found_tx, fetch_mode),
+            common: CommonFetchState::new(keys, attrs, found_tx, fetch_mode, bar),
             errors: FetchErrors::new(),
             metrics: &metrics::FILE_STORE_FETCH_METRICS,
 
             lfs_pointers: HashMap::new(),
 
             compute_aux_data: file_store.compute_aux_data,
-            lfs_progress: file_store.lfs_progress.clone(),
             lfs_enabled,
             format: file_store.format(),
             fetch_mode,
@@ -122,10 +121,6 @@ impl FetchState {
 
     pub(crate) fn all_keys(&self) -> Vec<Key> {
         self.common.all_keys()
-    }
-
-    pub(crate) fn metrics(&self) -> &FileStoreFetchMetrics {
-        &self.metrics
     }
 
     pub(crate) fn format(&self) -> SerializationFormat {
@@ -175,19 +170,19 @@ impl FetchState {
     }
 
     fn evict_to_cache(
-        key: Key,
+        node: Id20,
         file: LazyFile,
         indexedlog_cache: &IndexedLogHgIdDataStore,
         format: SerializationFormat,
     ) -> Result<LazyFile> {
-        let cache_entry = file.indexedlog_cache_entry(key.clone())?.ok_or_else(|| {
+        let cache_entry = file.indexedlog_cache_entry(node)?.ok_or_else(|| {
             anyhow!(
                 "expected LazyFile::SaplingRemoteApi, other LazyFile variants should not be written to cache"
             )
         })?;
         indexedlog_cache.put_entry(cache_entry)?;
         let mmap_entry = indexedlog_cache
-            .get_entry(key)?
+            .get_entry(&node)?
             .ok_or_else(|| anyhow!("failed to read entry back from indexedlog after writing"))?;
         Ok(LazyFile::IndexedLog(mmap_entry, format))
     }
@@ -222,15 +217,18 @@ impl FetchState {
         self.metrics.indexedlog.store(loc).fetch(pending.len());
         let format = self.format();
 
+        let bar = ProgressBar::new_adhoc("IndexedLog", 0, "files");
+
         self.common
             .iter_pending(FileAttributes::CONTENT, self.compute_aux_data, |key| {
                 count += 1;
+                bar.increase_position(1);
 
                 let res = if self.fetch_mode.ignore_result() {
                     store.contains(&key.hgid).map(|contains| {
                         if contains {
                             // Insert a stub entry if caller is ignoring the results.
-                            Some(Entry::new(key.clone(), Bytes::new(), Metadata::default()))
+                            Some(Entry::new(key.hgid, Bytes::new(), Metadata::default()))
                         } else {
                             None
                         }
@@ -317,9 +315,12 @@ impl FetchState {
             wants_aux |= FileAttributes::CONTENT_HEADER;
         }
 
+        let bar = ProgressBar::new_adhoc("IndexedLog", 0, "file metadata");
+
         self.common
             .iter_pending(wants_aux, self.compute_aux_data, |key| {
                 count += 1;
+                bar.increase_position(1);
 
                 let res = if ignore_results {
                     store.contains(key.hgid).map(|contains| {
@@ -424,6 +425,8 @@ impl FetchState {
         let mut errors = 0;
         let mut error: Option<String> = None;
 
+        let bar = ProgressBar::new_adhoc("LFS cache", pending.len() as u64, "files");
+
         self.metrics.lfs.store(loc).fetch(pending.len());
         for store_key in pending.into_iter() {
             let key = store_key.clone().maybe_into_key().expect(
@@ -431,6 +434,7 @@ impl FetchState {
             );
             match store.fetch_available(&store_key, self.fetch_mode.ignore_result()) {
                 Ok(Some(entry)) => {
+                    bar.increase_position(1);
                     // TODO(meyer): Make found behavior w/r/t LFS pointers and content consistent
                     self.metrics.lfs.store(loc).hit(1);
                     if let LfsStoreEntry::PointerOnly(_) = &entry {
@@ -441,9 +445,11 @@ impl FetchState {
                     self.found_lfs(key, entry)
                 }
                 Ok(None) => {
+                    bar.increase_position(1);
                     self.metrics.lfs.store(loc).miss(1);
                 }
                 Err(err) => {
+                    bar.increase_position(1);
                     self.metrics.lfs.store(loc).err(1);
                     errors += 1;
                     if error.is_none() {
@@ -487,14 +493,14 @@ impl FetchState {
     ) -> Result<(StoreFile, Option<LfsPointersEntry>)> {
         let entry = entry.result?;
 
-        let key = entry.key.clone();
+        let hgid = entry.key.hgid;
         let mut file = StoreFile::default();
         let mut lfsptr = None;
 
         if let Some(aux_data) = entry.aux_data() {
             let aux_data = aux_data.clone();
             if let Some(aux_cache) = aux_cache.as_ref() {
-                aux_cache.put(key.hgid, &aux_data)?;
+                aux_cache.put(hgid, &aux_data)?;
             }
             file.aux_data = Some(aux_data);
         }
@@ -508,7 +514,7 @@ impl FetchState {
                 lfsptr = Some(ptr);
             } else if let Some(indexedlog_cache) = indexedlog_cache.as_ref() {
                 file.content = Some(Self::evict_to_cache(
-                    key,
+                    hgid,
                     LazyFile::SaplingRemoteApi(entry, format),
                     indexedlog_cache,
                     format,
@@ -556,6 +562,8 @@ impl FetchState {
                 }
             })
             .collect();
+
+        let bar = ProgressBar::new_adhoc("SLAPI", pending_attrs.len() as u64, "files");
 
         // Fetch ClientRequestInfo from a thread local and pass to async code
         let maybe_client_request_info = get_client_request_info_thread_local();
@@ -609,6 +617,8 @@ impl FetchState {
         // Record found entries
         let mut unknown_error: Option<ClonableError> = None;
         for res in stream_to_iter(entries) {
+            bar.increase_position(1);
+
             // TODO(meyer): This outer SaplingRemoteApi error with no key sucks
             let (key, res) = match res {
                 Ok(result) => match result.map_err(|e| e.tag_network()) {
@@ -726,6 +736,8 @@ impl FetchState {
 
         let fetchable = FileAttributes::PURE_CONTENT;
 
+        let bar = ProgressBar::new_adhoc("CAS", 0, "digests");
+
         let digest_with_keys: Vec<(CasDigest, Key)> = self
             // TODO: fetch LFS files
             .pending_nonlfs(fetchable)
@@ -754,6 +766,8 @@ impl FetchState {
                     }
                 }
 
+                bar.increase_position(1);
+
                 if self.common.request_attrs.content_header && !store_file.attrs().content_header {
                     // If the caller wants hg content header but the aux data didn't have it,
                     // we won't find it in CAS, so don't bother fetching content from CAS.
@@ -770,6 +784,8 @@ impl FetchState {
                 }
             })
             .collect();
+
+        drop(bar);
 
         // Include the duplicates in the count.
         let keys_fetch_count = digest_with_keys.len();
@@ -795,10 +811,14 @@ impl FetchState {
         let start_time = Instant::now();
         let mut total_stats = CasFetchedStats::default();
 
+        let bar = ProgressBar::new_adhoc("CAS", digests.len() as u64, "files");
+
         if self.fetch_mode.ignore_result() {
             // Prefetching files, so we don't need the data, just to ensure digests are in the CAS local Cache.
             block_on(async {
-                cas_client.prefetch(&digests, CasDigestType::File).await.for_each(|results| match results {
+                cas_client.prefetch(&digests, CasDigestType::File).await.for_each(|results| {
+                    bar.increase_position(1);
+                    match results {
                     Ok((stats, digests_prefetched, digests_not_found)) => {
                         reqs += 1;
                         total_stats.add(&stats);
@@ -832,12 +852,15 @@ impl FetchState {
                         error += 1;
                         future::ready(())
                     }
-                }).await;
+                }}).await;
             });
         } else {
             // Fetching files, we need the data.
             block_on(async {
-                cas_client.fetch(&digests, CasDigestType::File).await.for_each(|results| match results {
+                cas_client.fetch(&digests, CasDigestType::File).await.for_each(|results|{
+                    bar.increase_position(1);
+
+                    match results {
                     Ok((stats, results)) => {
                         reqs += 1;
                         total_stats.add(&stats);
@@ -894,7 +917,7 @@ impl FetchState {
                         error += 1;
                         future::ready(())
                     }
-                }).await;
+                }}).await;
             });
         }
 
@@ -983,16 +1006,16 @@ impl FetchState {
 
         debug!("Fetching LFS - Count = {count}", count = pending.len());
 
-        let prog = self.lfs_progress.create_or_extend(pending.len() as u64);
-
         let mut keyed_errors = Vec::<(Key, anyhow::Error)>::new();
         let mut other_errors = vec![];
+
+        let bar = ProgressBar::new_adhoc("LFS remote", pending.len() as u64, "files");
 
         // Fetch & write to local LFS stores
         let top_level_error = store.batch_fetch(
             &pending,
             |sha256, data| -> Result<()> {
-                prog.increase_position(1);
+                bar.increase_position(1);
 
                 cache
                     .as_ref()

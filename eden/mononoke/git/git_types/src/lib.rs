@@ -8,7 +8,6 @@
 #![feature(error_generic_member_access)]
 #![feature(iterator_try_reduce)]
 
-pub mod handles;
 pub mod mode;
 
 mod thrift {
@@ -22,14 +21,23 @@ mod derive_commit;
 mod derive_delta_manifest_v2;
 mod errors;
 pub mod git_lfs;
-mod manifest;
 mod object;
 mod store;
-mod tree;
+pub mod tree;
 
+use std::io::Write;
+
+use anyhow::Context;
+use anyhow::Result;
 pub use delta_manifest_v2::ObjectKind as DeltaObjectKind;
+use gix_hash::oid;
+use gix_hash::ObjectId;
+use gix_object::Object;
+use gix_object::WriteTo;
 pub use object::ObjectContent;
 pub use object::ObjectKind;
+use sha1::Digest;
+use sha1::Sha1;
 
 pub use crate::commit::MappedGitCommitId;
 pub use crate::delta_manifest_ops::fetch_git_delta_manifest;
@@ -41,12 +49,6 @@ pub use crate::delta_manifest_v2::GDMV2ObjectEntry;
 pub use crate::delta_manifest_v2::GitDeltaManifestV2;
 pub use crate::derive_delta_manifest_v2::RootGitDeltaManifestV2Id;
 pub use crate::errors::GitError;
-pub use crate::handles::blob::BlobHandle;
-pub use crate::handles::tree::Tree;
-pub use crate::handles::tree::TreeBuilder;
-pub use crate::handles::tree::TreeHandle;
-pub use crate::handles::tree::TreeMember;
-pub use crate::handles::tree::Treeish;
 pub use crate::store::fetch_git_object;
 pub use crate::store::fetch_git_object_bytes;
 pub use crate::store::fetch_non_blob_git_object;
@@ -59,3 +61,19 @@ pub use crate::store::GitIdentifier;
 pub use crate::store::HeaderState;
 pub use crate::tree::GitLeaf;
 pub use crate::tree::GitTreeId;
+
+/// Free function responsible for writing Git object data to a Vec
+/// in loose format
+pub fn git_object_bytes_with_hash(git_object: &Object) -> Result<(Vec<u8>, ObjectId)> {
+    let mut object_bytes = git_object.loose_header().into_vec();
+    git_object.write_to(object_bytes.by_ref())?;
+
+    let mut hasher = Sha1::new();
+    hasher.update(&object_bytes);
+    let hash_bytes = hasher.finalize();
+    let hash = oid::try_from_bytes(hash_bytes.as_ref())
+        .context("Failed to convert packfile item hash to Git Object ID")?
+        .into();
+
+    Ok((object_bytes, hash))
+}

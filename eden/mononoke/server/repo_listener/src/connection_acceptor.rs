@@ -17,13 +17,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context;
-use anyhow::Error;
 use anyhow::Result;
 use bytes::Bytes;
 use cached_config::ConfigStore;
 use connection_security_checker::ConnectionSecurityChecker;
 use edenapi_service::SaplingRemoteApi;
-use failure_ext::SlogKVError;
 use fbinit::FacebookInit;
 use futures::channel::mpsc;
 use futures::channel::oneshot;
@@ -47,6 +45,7 @@ use mononoke_api::Mononoke;
 use mononoke_api::Repo;
 use mononoke_app::monitoring::ReadyFlagService;
 use mononoke_configs::MononokeConfigs;
+use mononoke_macros::mononoke;
 use openssl::ssl::Ssl;
 use openssl::ssl::SslAcceptor;
 use permission_checker::AclProvider;
@@ -59,7 +58,6 @@ use scribe_ext::Scribe;
 use scuba_ext::MononokeScubaSampleBuilder;
 use slog::debug;
 use slog::error;
-use slog::info;
 use slog::warn;
 use slog::Logger;
 use sshrelay::IoStream;
@@ -79,7 +77,6 @@ use tokio_util::codec::FramedWrite;
 
 use crate::errors::ErrorKind;
 use crate::http_service::MononokeHttpService;
-use crate::request_handler::create_conn_logger;
 use crate::request_handler::request_handler;
 use crate::wireproto_sink::WireprotoSink;
 
@@ -198,7 +195,7 @@ pub async fn connection_acceptor(
                     conn.spawn_task(task, "Failed to handle_connection");
                 }
                 Err(err) => {
-                    error!(root_log, "{}", err.to_string(); SlogKVError(Error::from(err)));
+                    error!(root_log, "{}", err.to_string(); "error" => ?err);
                 }
             },
         };
@@ -239,6 +236,7 @@ pub struct PendingConnection {
 pub struct AcceptedConnection {
     pub pending: PendingConnection,
     pub is_trusted: bool,
+    #[allow(dead_code)]
     pub mtls_disabled: bool,
     pub identities: Arc<MononokeIdentitySet>,
 }
@@ -255,7 +253,7 @@ impl PendingConnection {
 
         OPEN_CONNECTIONS.fetch_add(1, Ordering::Relaxed);
 
-        tokio::task::spawn(async move {
+        mononoke::spawn_task(async move {
             let logger = &this.acceptor.logger;
             let res = task
                 .on_cancel(|| warn!(logger, "connection to {} was cancelled", this.addr))
@@ -347,18 +345,13 @@ where
         stdin,
         stdout,
         stderr,
-        logger,
         keep_alive,
         join_handle,
     } = ChannelConn::setup(framed, conn.clone(), metadata.clone());
 
     if metadata.client_debug() {
-        info!(&logger, "{:#?}", metadata; "remote" => "true");
+        let _ = stderr.unbounded_send(Bytes::from(format!("{metadata:#?}")));
     }
-
-    // Don't let the logger hold onto the channel. This is a bit fragile (but at least it breaks
-    // tests deterministically).
-    drop(logger);
 
     let stdio = Stdio {
         metadata,
@@ -417,7 +410,6 @@ pub struct ChannelConn {
     stdin: BoxStream<'static, Result<Bytes, io::Error>>,
     stdout: mpsc::Sender<Bytes>,
     stderr: mpsc::UnboundedSender<Bytes>,
-    logger: Logger,
     keep_alive: AbortHandle,
     join_handle: JoinHandle<Result<(), io::Error>>,
 }
@@ -510,10 +502,10 @@ impl ChannelConn {
                 futures::future::abortable(keep_alive_sender);
 
             // spawn a task for sending keepalive messages
-            tokio::spawn(keep_alive_sender);
+            mononoke::spawn_task(keep_alive_sender);
 
             // spawn a task for forwarding stdout/err into stream
-            let join_handle = tokio::spawn(fwd);
+            let join_handle = mononoke::spawn_task(fwd);
 
             // NOTE: This might seem useless, but it's not. When you spawn a task, Tokio puts it on
             // a "LIFO slot" associated with the current thread. While the task is in the LIFO
@@ -525,18 +517,15 @@ impl ChannelConn {
             // dummy taks here. This task will take `fwd`'s place in the LIFO slot, thus pushing
             // `fwd` onto a task queue where other runtime threads can claim it. This way, even if
             // this thread goes do some expensive CPU-bound work, we won't delay keepalives.
-            tokio::spawn(async {});
+            mononoke::spawn_task(async {});
 
             (otx, etx, keep_alive_abort, join_handle)
         };
-
-        let logger = create_conn_logger(stderr.clone(), None, None);
 
         ChannelConn {
             stdin,
             stdout,
             stderr,
-            logger,
             keep_alive,
             join_handle,
         }

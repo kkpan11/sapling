@@ -5,9 +5,6 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-import type {TypeaheadKind} from './CommitInfoView/types';
-import type {InternalTypes} from './InternalTypes';
-import type {Serializable} from './serialize';
 import type {TypeaheadResult} from 'isl-components/Types';
 import type {TrackEventName} from 'isl-server/src/analytics/eventNames';
 import type {TrackDataWithEventName} from 'isl-server/src/analytics/types';
@@ -17,6 +14,9 @@ import type {ParsedDiff} from 'shared/patch/parse';
 import type {AllUndefined, Json} from 'shared/typeUtils';
 import type {Hash} from 'shared/types/common';
 import type {ExportStack, ImportedStack, ImportStack} from 'shared/types/stack';
+import type {TypeaheadKind} from './CommitInfoView/types';
+import type {InternalTypes} from './InternalTypes';
+import type {Serializable} from './serialize';
 
 export type Result<T> = {value: T; error?: undefined} | {value?: undefined; error: Error};
 
@@ -113,11 +113,6 @@ export enum ArchivedReasonType {
   STALE_FILE_CHANGED = 'STALE_FILE_CHANGED',
 }
 
-export type PhabricatorVersion = {
-  versionAbbr?: string;
-  isLatestVersion?: boolean;
-};
-
 export type CodeChange = {
   oldContent?: string;
   newContent?: string;
@@ -151,7 +146,6 @@ export type DiffComment = {
   html: string;
   content?: string;
   created: Date;
-  versionInfo?: PhabricatorVersion;
   commitHash?: string;
   /** If it's an inline comment, this is the file path with the comment */
   filename?: string;

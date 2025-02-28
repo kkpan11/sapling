@@ -8,7 +8,7 @@ from __future__ import absolute_import
 # Standard Library
 import os
 
-from sapling import error, json, pycompat
+from sapling import error, json
 from sapling.i18n import _
 
 from . import baseservice, error as ccerror, workspace as ccworkspace
@@ -54,7 +54,7 @@ class LocalService(baseservice.BaseService):
             self.path, self._workspacefilename("commitcloudservicedb", workspace)
         )
         with open(filename, "wb") as f:
-            f.write(pycompat.encodeutf8(json.dumps(data)))
+            f.write(json.dumps(data).encode())
 
     def _injectheaddates(self, data, workspace):
         """inject a head_dates field into the data"""
@@ -254,22 +254,20 @@ class LocalService(baseservice.BaseService):
         filename = os.path.join(self.path, "workspacesdata")
         with open(filename, "wb") as f:
             f.write(
-                pycompat.encodeutf8(
-                    json.dumps(
-                        {
-                            "workspaces_data": {
-                                "workspaces": [
-                                    {
-                                        "name": item.name,
-                                        "archived": item.archived,
-                                        "version": item.version,
-                                    }
-                                    for item in data
-                                ]
-                            }
+                json.dumps(
+                    {
+                        "workspaces_data": {
+                            "workspaces": [
+                                {
+                                    "name": item.name,
+                                    "archived": item.archived,
+                                    "version": item.version,
+                                }
+                                for item in data
+                            ]
                         }
-                    )
-                )
+                    }
+                ).encode()
             )
 
     def updateworkspacearchive(self, reponame, workspace, archived):

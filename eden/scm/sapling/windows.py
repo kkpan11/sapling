@@ -23,7 +23,7 @@ from typing import IO
 
 import bindings
 
-from . import encoding, error, pycompat, win32, winutil
+from . import encoding, error, win32, winutil
 from .i18n import _
 
 osutil = bindings.cext.osutil
@@ -172,7 +172,7 @@ def posixfile(name: str, mode: str = "r", buffering: int = -1) -> "IO":
     # pyre-fixme[10]: Name `WindowsError` is used but not defined.
     except WindowsError as err:
         # convert to a friendlier exception
-        raise IOError(err.errno, "%s: %s" % (name, encoding.strtolocal(err.strerror)))
+        raise IOError(err.errno, "%s: %s" % (name, err.strerror))
 
 
 def fdopen(fd, mode="r", bufsize=-1, **kwargs):
@@ -300,7 +300,7 @@ def setbinary(fd):
 
 
 def pconvert(path):
-    return path.replace(pycompat.ossep, "/")
+    return path.replace(os.sep, "/")
 
 
 def localpath(path):
@@ -312,7 +312,7 @@ def normpath(path):
 
 
 def normcase(path):
-    return encoding.upper(path)  # NTFS compares via upper()
+    return path.upper()  # NTFS compares via upper()
 
 
 # see posix.py for definitions
@@ -394,7 +394,7 @@ def findexe(command):
     An extension from PATHEXT is found and added if not present.
     If command isn't found None is returned."""
     pathext = encoding.environ.get("PATHEXT", ".COM;.EXE;.BAT;.CMD")
-    pathexts = [ext for ext in pathext.lower().split(pycompat.ospathsep)]
+    pathexts = [ext for ext in pathext.lower().split(os.pathsep)]
     if os.path.splitext(command)[1].lower() in pathexts:
         pathexts = [""]
 
@@ -406,10 +406,10 @@ def findexe(command):
                 return executable
         return None
 
-    if pycompat.ossep in command:
+    if os.sep in command:
         return findexisting(command)
 
-    for path in encoding.environ.get("PATH", "").split(pycompat.ospathsep):
+    for path in encoding.environ.get("PATH", "").split(os.pathsep):
         executable = findexisting(os.path.join(path, command))
         if executable is not None:
             return executable
@@ -484,18 +484,7 @@ def removedirs(name: str) -> None:
         head, tail = os.path.split(head)
 
 
-def rename(src: str, dst: str) -> None:
-    """Atomically rename file src to dst, replacing dst if it exists
-
-    Note that this is only really atomic for files (not dirs) on the
-    same volume"""
-    try:
-        win32.movefileex(src, dst)
-    except OSError as e:
-        if e.errno != errno.EEXIST and e.errno != errno.EACCES:
-            raise
-        unlink(dst)
-        os.rename(src, dst)
+rename = os.replace
 
 
 def syncfile(fp):
@@ -586,9 +575,7 @@ def lookupreg(key, valname=None, scope=None):
         scope = (scope,)
     for s in scope:
         try:
-            val = winreg.QueryValueEx(winreg.OpenKey(s, key), valname)[0]
-            # never let a Unicode string escape into the wild
-            return encoding.unitolocal(val)
+            return winreg.QueryValueEx(winreg.OpenKey(s, key), valname)[0]
         except EnvironmentError:
             pass
 

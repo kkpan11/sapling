@@ -23,6 +23,7 @@ use futures::StreamExt;
 use futures::TryFutureExt;
 use futures::TryStreamExt;
 use futures_watchdog::WatchdogExt;
+use mononoke_macros::mononoke;
 use mononoke_types::path::MPath;
 use mononoke_types::NonRootMPath;
 
@@ -46,11 +47,12 @@ where
     <Self as StoreLoadable<Store>>::Value: Manifest<Store, TreeId = Self> + Send + Sync,
     <<Self as StoreLoadable<Store>>::Value as Manifest<Store>>::Leaf: Clone + Send + Eq + Unpin,
 {
-    fn find_entries<I, P>(
+    fn find_entries_filtered<I, P, F>(
         &self,
         ctx: CoreContext,
         store: Store,
         paths_or_prefixes: I,
+        filter: F,
     ) -> BoxStream<
         'static,
         Result<
@@ -64,21 +66,25 @@ where
     where
         I: IntoIterator<Item = P>,
         PathOrPrefix: From<P>,
+        F: Fn(&MPath, Self) -> bool + Clone + Send + Sync + 'static,
     {
         let selector = select_path_tree(paths_or_prefixes);
 
         let init = Some((self.clone(), selector, MPath::ROOT, false));
         (async_stream::stream! {
             let store = &store;
-            borrowed!(ctx, store);
+            borrowed!(ctx, store, filter);
             let s = bounded_traversal::bounded_traversal_stream(
                 256,
                 init,
                 move |(manifest_id, selector, path, recursive)| {
                     let (select, subentries) = selector.deconstruct();
-                    cloned!(ctx, store);
+                    cloned!(ctx, store, filter);
                     async move {
-                        tokio::spawn(async move {
+                        if !filter(&path, manifest_id.clone()) {
+                            return Ok((Vec::new(), Vec::new()));
+                        }
+                        mononoke::spawn_task(async move {
                             let manifest = manifest_id.load(&ctx, &store).await?;
                             let mut output = Vec::new();
                             let mut recurse = Vec::new();
@@ -131,6 +137,28 @@ where
             }
         })
         .boxed()
+    }
+
+    fn find_entries<I, P>(
+        &self,
+        ctx: CoreContext,
+        store: Store,
+        paths_or_prefixes: I,
+    ) -> BoxStream<
+        'static,
+        Result<
+            (
+                MPath,
+                Entry<Self, <<Self as StoreLoadable<Store>>::Value as Manifest<Store>>::Leaf>,
+            ),
+            Error,
+        >,
+    >
+    where
+        I: IntoIterator<Item = P>,
+        PathOrPrefix: From<P>,
+    {
+        self.find_entries_filtered(ctx, store, paths_or_prefixes, |_, _| true)
     }
 
     fn find_entry(
@@ -317,11 +345,11 @@ where
 
                     match input {
                         Diff::Changed(path, left, right) => {
-                            let l = tokio::spawn({
+                            let l = mononoke::spawn_task({
                                 cloned!(ctx, left, store);
                                 async move { left.load(&ctx, &store).watched(ctx.logger()).await }
                             });
-                            let r = tokio::spawn({
+                            let r = mononoke::spawn_task({
                                 cloned!(ctx, right, other_store);
                                 async move { right.load(&ctx, &other_store).watched(ctx.logger()).await }
                             });
@@ -514,7 +542,7 @@ where
 {
     match diff_against.first().cloned() {
         Some(parent) => async move {
-            tokio::spawn(async move {
+            mononoke::spawn_task(async move {
                 let mut new_entries = Vec::new();
                 let mut parent_diff = parent.diff(ctx.clone(), store.clone(), mf_id);
                 while let Some(diff_entry) = parent_diff.try_next().await? {

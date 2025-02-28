@@ -59,13 +59,21 @@ blobimport hg servers repos into Mononoke repos
 
   $ export COMMIT_DATE="1985-09-04T00:00:00.00Z"
 move things in small repo with merge
-  $ megarepo_tool move 1 with_merge_master user "with merge move" --mark-public --commit-date-rfc3339 "$COMMIT_DATE" --bookmark with_merge_move --mapping-version-name TEST_VERSION_NAME &> /dev/null
+  $ quiet mononoke_admin megarepo move-commit --repo-id 0 --source-repo-id 1 \
+  > -B with_merge_master -a user -m "with merge move" --mark-public \
+  > --commit-date-rfc3339 "$COMMIT_DATE" --set-bookmark with_merge_move \
+  > --mapping-version-name TEST_VERSION_NAME
 
 move things in another small repo
-  $ megarepo_tool move 2 another_master user "another move" --mark-public --commit-date-rfc3339 "$COMMIT_DATE" --bookmark another_move --mapping-version-name TEST_VERSION_NAME &> /dev/null
+  $ quiet mononoke_admin megarepo move-commit --repo-id 0 --source-repo-id 2 \
+  > -B another_master -a user -m "another move" --mark-public \
+  > --commit-date-rfc3339 "$COMMIT_DATE" --set-bookmark another_move \
+  > --mapping-version-name TEST_VERSION_NAME
 
 merge things in both repos
-  $ megarepo_tool merge with_merge_move another_move user "megarepo merge" --mark-public --commit-date-rfc3339 "$COMMIT_DATE" --bookmark master_bookmark &> /dev/null
+  $ mononoke_admin megarepo merge --repo-id 0 -B with_merge_move -B another_move -a user \
+  > -m "megarepo merge" --mark-public --commit-date-rfc3339 "$COMMIT_DATE" \
+  > --set-bookmark master_bookmark &> /dev/null
 
 start mononoke server
   $ start_and_wait_for_mononoke_server
@@ -201,7 +209,8 @@ Try to sync it automatically, it's expected to fail
 
 Now sync with the tool
   $ cd "$TESTTMP"
-  $ megarepo_tool_multirepo --source-repo-id 1 --target-repo-id 0 sync-diamond-merge with_merge_master --bookmark master_bookmark |& grep -v "using repo"
+
+  $ mononoke_admin megarepo sync-diamond-merge --bookmark with_merge_master --source-repo-id 1 --target-repo-id 0 --onto-bookmark master_bookmark |& grep -v "using repo"
   * changeset resolved as: ChangesetId(Blake2(46c0f70c6300f4168cb70321839ac0079c74b6d3295adb81eeb1932be4f80e9d)) (glob)
   * Preparing to sync a merge commit 46c0f70c6300f4168cb70321839ac0079c74b6d3295adb81eeb1932be4f80e9d... (glob)
   * 1 new commits are going to be merged in (glob)
@@ -288,7 +297,7 @@ Merge with preserved ancestors
 
 -- sync the merge
   $ cd "$TESTTMP"
-  $ megarepo_tool_multirepo --source-repo-id 1 --target-repo-id 0 sync-diamond-merge with_merge_master --bookmark master_bookmark
+  $ mononoke_admin megarepo sync-diamond-merge --bookmark with_merge_master --source-repo-id 1 --target-repo-id 0 --onto-bookmark master_bookmark
   * using repo "with_merge" repoid RepositoryId(1) (glob)
   * using repo "meg" repoid RepositoryId(0) (glob)
   * changeset resolved as: ChangesetId(Blake2(3f71f093fcfbebcc47c981c847cd80c7d0bf063c5022aba53fab95244e4c4f1c)) (glob)

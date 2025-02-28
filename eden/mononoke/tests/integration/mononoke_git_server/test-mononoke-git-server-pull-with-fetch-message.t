@@ -54,7 +54,14 @@
 # Clone the Git repo from Mononoke
   $ git_client clone $MONONOKE_GIT_SERVICE_BASE_URL/$REPONAME.git
   Cloning into 'repo'...
-  remote: HELLO USER
+  remote: HELLO USERConverting HAVE Git commits to Bonsais        
+  remote: Converting WANT Git commits to Bonsais        
+  remote: Collecting Bonsai commits to send to client        
+  remote: Couting number of objects to be sent in packfile        
+  remote: Generating trees and blobs stream        
+  remote: Generating commits stream        
+  remote: Generating tags stream        
+  remote: Sending packfile stream        
 
 # Add more commits to the original git repo
   $ cd $GIT_REPO_ORIGIN
@@ -75,10 +82,18 @@
   $ cd $REPONAME
 # Wait for the warm bookmark cache to catch up with the latest changes
   $ wait_for_git_bookmark_move HEAD $current_head
+  $ wait_for_git_bookmark_create refs/tags/last_tag
 
 # Pulling from git server returns the extra message  
   $ git_client pull
-  remote: HELLO USER
+  remote: HELLO USERConverting HAVE Git commits to Bonsais        
+  remote: Converting WANT Git commits to Bonsais        
+  remote: Collecting Bonsai commits to send to client        
+  remote: Couting number of objects to be sent in packfile        
+  remote: Generating trees and blobs stream        
+  remote: Generating commits stream        
+  remote: Generating tags stream        
+  remote: Sending packfile stream        
   From https://localhost:$LOCAL_PORT/repos/git/ro/repo
      db39b4c..356883f  master_bookmark -> origin/master_bookmark
    * [new tag]         last_tag        -> last_tag

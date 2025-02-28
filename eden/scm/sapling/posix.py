@@ -22,12 +22,13 @@ import re
 import resource
 import socket
 import stat
+import sys
 import tempfile
 import unicodedata
 
 import bindings
 
-from . import encoding, error, fscap, identity, pycompat
+from . import encoding, error, fscap, identity, sysutil
 from .i18n import _
 
 osutil = bindings.cext.osutil
@@ -97,7 +98,7 @@ def nlinks(name):
 def parsepatchoutput(output_line):
     """parses the output produced by patch and returns the filename"""
     pf = output_line[14:]
-    if pycompat.sysplatform == "OpenVMS":
+    if sys.platform == "OpenVMS":
         if pf[0] == "`":
             pf = pf[1:-1]  # Remove the quotes
     else:
@@ -329,13 +330,13 @@ def getmaxrss():
     res = resource.getrusage(resource.RUSAGE_SELF)
 
     # Linux returns the maxrss in KB, whereas macOS returns in bytes.
-    if pycompat.isdarwin:
+    if sysutil.isdarwin:
         return res.ru_maxrss
     else:
         return res.ru_maxrss * 1024
 
 
-if pycompat.isdarwin:
+if sysutil.isdarwin:
 
     def normcase(path):
         """
@@ -356,38 +357,16 @@ if pycompat.isdarwin:
         """
 
         try:
-            bytepath = pycompat.encodeutf8(path)
-            return pycompat.decodeutf8(
-                encoding.asciilower(bytepath)
-            )  # exception for non-ASCII
+            bytepath = path.encode()
+            return encoding.asciilower(bytepath).decode()  # exception for non-ASCII
         except UnicodeDecodeError:
-            return pycompat.decodeutf8(normcasefallback(path))
+            return normcasefallback(path).decode()
 
     normcasespec = encoding.normcasespecs.lower
 
     def normcasefallback(path):
-        try:
-            # unicodedata.normalize expects a unicode string, so don't use
-            # pycompat.decodeutf8() here because it would return bytes in py2.
-            u = pycompat.ensureunicode(path)
-        except UnicodeDecodeError:
-            # OS X percent-encodes any bytes that aren't valid utf-8
-            s = ""
-            pos = 0
-            l = len(path)
-            while pos < l:
-                try:
-                    c = encoding.getutf8char(path, pos)
-                    pos += len(c)
-                except ValueError:
-                    c = "%%%02X" % ord(path[pos : pos + 1])
-                    pos += 1
-                s += c
-
-            u = s.decode("utf-8")
-
         # Decompose then lowercase (HFS+ technote specifies lower)
-        enc = unicodedata.normalize(r"NFD", u).lower().encode("utf-8")
+        enc = unicodedata.normalize(r"NFD", path).lower().encode("utf-8")
         # drop HFS+ ignored characters
         return encoding.hfsignoreclean(enc)
 
@@ -410,7 +389,7 @@ _needsshellquote = None
 
 
 def shellquote(s):
-    if pycompat.sysplatform == "OpenVMS":
+    if sys.platform == "OpenVMS":
         return '"%s"' % s
     global _needsshellquote
     if _needsshellquote is None:
@@ -428,7 +407,7 @@ def popen(command, mode="r"):
 
 def testpid(pid):
     """return False if pid dead, True if running or not sure"""
-    if pycompat.sysplatform == "OpenVMS":
+    if sys.platform == "OpenVMS":
         return True
     try:
         os.kill(pid, 0)
@@ -455,7 +434,7 @@ def findexe(command):
     If command is a basename then PATH is searched for command.
     PATH isn't searched if command is an absolute or relative path.
     If command isn't found None is returned."""
-    if pycompat.sysplatform == "OpenVMS":
+    if sys.platform == "OpenVMS":
         return command
 
     def findexisting(executable):
@@ -464,13 +443,13 @@ def findexe(command):
             return executable
         return None
 
-    if pycompat.ossep in command:
+    if os.sep in command:
         return findexisting(command)
 
-    if pycompat.sysplatform == "plan9":
+    if sys.platform == "plan9":
         return findexisting(os.path.join("/bin", command))
 
-    for path in encoding.environ.get("PATH", "").split(pycompat.ospathsep):
+    for path in encoding.environ.get("PATH", "").split(os.pathsep):
         executable = findexisting(os.path.join(path, command))
         if executable is not None:
             return executable
@@ -632,9 +611,6 @@ def bindunixsocket(sock, path):
 
 
 def _safehasattr(thing, attr):
-    # deferred import to avoid circular import
-    from . import util
-
     return hasattr(thing, attr)
 
 

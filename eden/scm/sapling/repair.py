@@ -20,7 +20,6 @@ from typing import List, Optional
 from . import bookmarks, bundle2, changegroup, discovery, error, scmutil, util
 from .i18n import _
 from .node import bin, hex, short
-from .pycompat import encodeutf8, range
 
 
 def _bundle(repo, bases, heads, node, suffix, compress: bool = True) -> str:
@@ -34,7 +33,7 @@ def _bundle(repo, bases, heads, node, suffix, compress: bool = True) -> str:
     # Include a hash of all the nodes in the filename for uniqueness
     allcommits = repo.set("%ln::%ln", bases, heads)
     allhashes = sorted(c.hex() for c in allcommits)
-    totalhash = hashlib.sha1(encodeutf8("".join(allhashes))).digest()
+    totalhash = hashlib.sha1("".join(allhashes).encode()).digest()
     name = "%s/%s-%s-%s.hg" % (backupdir, short(node), hex(totalhash[:4]), suffix)
 
     cgversion = changegroup.localversion(repo)

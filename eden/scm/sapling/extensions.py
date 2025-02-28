@@ -19,7 +19,7 @@ import inspect
 import os
 import sys
 
-from . import cmdutil, configitems, error, pycompat, util
+from . import cmdutil, configitems, error, util
 from .i18n import _, gettext
 
 _preimported = {}
@@ -129,6 +129,7 @@ def isenabled(ui, name):
         # specified.
         if conf is None and name in DEFAULT_EXTENSIONS:
             return True
+    return False
 
 
 def extensions(ui=None):

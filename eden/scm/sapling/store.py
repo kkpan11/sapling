@@ -12,6 +12,7 @@
 
 from __future__ import absolute_import
 
+import io
 import stat
 from typing import Optional
 
@@ -19,8 +20,7 @@ import bindings
 
 parsers = bindings.cext.parsers
 
-from . import error, pycompat, util, vfs as vfsmod
-from .pycompat import decodeutf8, encodeutf8, inttobyte, range
+from . import error, util, vfs as vfsmod
 
 
 # This avoids a collision between a file named foo and a dir named
@@ -82,6 +82,10 @@ def _reserved():
         yield x
 
 
+def _inttobyte(value):
+    return bytes([value])
+
+
 def _buildencodefun():
     """
     >>> enc, dec = _buildencodefun()
@@ -134,15 +138,15 @@ def _buildencodefun():
     True
     """
     e = "_"
-    xchr = pycompat.bytechr
-    asciistr = list(map(inttobyte, range(127)))
+    xchr = chr
+    asciistr = list(map(_inttobyte, range(127)))
     capitals = list(range(ord("A"), ord("Z") + 1))
 
     cmap = dict((x, x) for x in asciistr)
     for x in _reserved():
-        cmap[inttobyte(x)] = encodeutf8("~%02x" % x)
+        cmap[_inttobyte(x)] = ("~%02x" % x).encode()
     for x in capitals + [ord(e)]:
-        cmap[inttobyte(x)] = encodeutf8(e + xchr(x).lower())
+        cmap[_inttobyte(x)] = (e + xchr(x).lower()).encode()
 
     dmap = {}
     for k, v in cmap.items():
@@ -151,7 +155,7 @@ def _buildencodefun():
     cmaplong = cmap.copy()
 
     for i in capitals:
-        c = inttobyte(i)
+        c = _inttobyte(i)
         cmaplong[c] = c
         assert c not in dmap
         dmap[c] = c
@@ -163,14 +167,14 @@ def _buildencodefun():
 
     def encodecomp(comp):
         assert isinstance(comp, str), "encodecomp accepts str paths"
-        comp = encodeutf8(comp)
+        comp = comp.encode()
         comp = [comp[i : i + 1] for i in range(len(comp))]
         encoded = b"".join(cmap[c] for c in comp)
         if len(encoded) > 255:
             encoded = b"".join(cmaplong[c] for c in comp)
         if len(encoded) > 255:
             encoded = b"".join(cmapverylong[c] for c in comp)
-        return decodeutf8(encoded)
+        return encoded.decode()
 
     def encodemaybelong(path):
         assert isinstance(path, str), "encodemaybelong accepts str paths"
@@ -192,7 +196,7 @@ def _buildencodefun():
 
     return (
         encodemaybelong,
-        lambda s: decodeutf8(b"".join(list(decode(encodeutf8(s))))),
+        lambda s: b"".join(list(decode(s.encode()))).decode(),
     )
 
 
@@ -315,7 +319,7 @@ class metavfs(util.proxy_wrapper, vfsmod.abstractvfs):
         metalog = self._rsrepo.metalog()
 
         # Keys that are previously tracked in metalog.
-        tracked = set(pycompat.decodeutf8((metalog.get("tracked") or b"")).split())
+        tracked = set((metalog.get("tracked") or b"").decode().split())
         # Keys that should be tracked (specified by config).
         desired = set(self.metapaths)
 
@@ -369,10 +373,10 @@ class metavfs(util.proxy_wrapper, vfsmod.abstractvfs):
 
 
 class readablestream:
-    """Similar to stringio, but also works in a with context"""
+    """Similar to io.BytesIO, but also works in a with context"""
 
     def __init__(self, data):
-        self.stream = util.stringio(data)
+        self.stream = io.BytesIO(data)
 
     def __enter__(self):
         return self.stream
@@ -388,11 +392,11 @@ class readablestream:
 
 
 class writablestream:
-    """Writable stringio that writes to specified place on close"""
+    """Writable io.BytesIO that writes to specified place on close"""
 
     def __init__(self, writefunc):
         self.writefunc = writefunc
-        self.stream = util.stringio()
+        self.stream = io.BytesIO()
         self.closed = False
 
     def __enter__(self):

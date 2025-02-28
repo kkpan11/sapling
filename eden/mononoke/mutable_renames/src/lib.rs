@@ -62,6 +62,7 @@ impl SqlConstructFromMetadataDatabaseConfig for SqlMutableRenamesStore {}
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MutableRenameEntry {
     dst_cs_id: ChangesetId,
+    dst_path: MPath,
     dst_path_hash: PathHash,
     src_cs_id: ChangesetId,
     src_path: MPath,
@@ -93,6 +94,7 @@ impl MutableRenameEntry {
 
         Ok(Self {
             dst_cs_id,
+            dst_path,
             dst_path_hash,
             src_cs_id,
             src_path,
@@ -100,6 +102,12 @@ impl MutableRenameEntry {
             src_unode,
             is_tree,
         })
+    }
+
+    /// Get the destination path for this entry, or None if the destination
+    /// is the repo root
+    pub fn dst_path(&self) -> &MPath {
+        &self.dst_path
     }
 
     fn dst_path_hash(&self) -> &PathHash {
@@ -384,6 +392,101 @@ impl MutableRenames {
             }
         }
     }
+
+    pub async fn list_renames_by_dst_cs_uncached(
+        &self,
+        ctx: &CoreContext,
+        dst_cs_id: ChangesetId,
+    ) -> Result<Vec<MutableRenameEntry>, Error> {
+        ctx.perf_counters()
+            .increment_counter(PerfCounterType::SqlReadsReplica);
+        let rows = ListRenamesByDstChangeset::maybe_traced_query(
+            &self.store.read_connection,
+            ctx.client_request_info(),
+            &self.repo_id,
+            &dst_cs_id,
+        )
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(
+                |(src_cs_id, dst_path_bytes, src_path_bytes, src_unode, is_tree)| {
+                    let dst_path = MPath::new(dst_path_bytes)?;
+                    let src_path = MPath::new(src_path_bytes)?;
+                    let src_unode = if is_tree == 1 {
+                        Entry::Tree(ManifestUnodeId::new(src_unode))
+                    } else {
+                        Entry::Leaf(FileUnodeId::new(src_unode))
+                    };
+
+                    MutableRenameEntry::new(dst_cs_id, dst_path, src_cs_id, src_path, src_unode)
+                },
+            )
+            .filter_map(|r| r.ok())
+            .collect())
+    }
+
+    pub async fn delete_renames(
+        &self,
+        ctx: &CoreContext,
+        renames: Vec<MutableRenameEntry>,
+    ) -> Result<(u64, u64), Error> {
+        let mut rows = vec![];
+        let mut path_hashes = HashSet::new();
+        for rename in &renames {
+            rows.push((
+                &self.repo_id,
+                &rename.dst_cs_id,
+                &rename.dst_path_hash().hash.0,
+            ));
+            path_hashes.insert(&rename.dst_path_hash().hash.0);
+            path_hashes.insert(&rename.src_path_hash().hash.0);
+        }
+
+        let txn = self.store.write_connection.start_transaction().await?;
+
+        // Delete renames
+        let (txn, delete_renames_result) = DeleteRenames::maybe_traced_query_with_transaction(
+            txn,
+            ctx.client_request_info(),
+            &rows[..],
+        )
+        .await?;
+
+        // Compute orphan paths
+        let (txn, used_path_hashes) = FindUsedPathHashes::maybe_traced_query_with_transaction(
+            txn,
+            ctx.client_request_info(),
+            &path_hashes.clone().into_iter().collect::<Vec<_>>()[..],
+        )
+        .await?;
+        for (dst_path_hash, src_path_hash) in used_path_hashes {
+            path_hashes.remove(&dst_path_hash);
+            path_hashes.remove(&src_path_hash);
+        }
+
+        // Delete orphan paths
+        let (txn, delete_paths_result) = DeletePaths::maybe_traced_query_with_transaction(
+            txn,
+            ctx.client_request_info(),
+            &path_hashes.into_iter().collect::<Vec<_>>()[..],
+        )
+        .await?;
+
+        txn.commit().await?;
+        ctx.perf_counters()
+            .increment_counter(PerfCounterType::SqlWrites);
+
+        // Cache invalidation is intentionally left out as the use cases of
+        // mutable renames can tolerate a few hours of inconsistency, e.g.
+        // https://fburl.com/code/rvfdjcn7
+
+        Ok((
+            delete_renames_result.affected_rows(),
+            delete_paths_result.affected_rows(),
+        ))
+    }
 }
 
 mononoke_queries! {
@@ -415,6 +518,20 @@ mononoke_queries! {
         "{insert_or_ignore} INTO mutable_renames_paths (path_hash, path) VALUES {values}"
     }
 
+    write DeleteRenames(values: (
+        repo_id: RepositoryId,
+        dst_cs_id: ChangesetId,
+        dst_path_hash: Vec<u8>,
+    )) {
+        none,
+        "DELETE FROM mutable_renames WHERE (repo_id, dst_cs_id, dst_path_hash) IN (VALUES {values})"
+    }
+
+    write DeletePaths(>list path_hashes: &Vec<u8>) {
+        none,
+        "DELETE FROM mutable_renames_paths WHERE path_hash IN {path_hashes}"
+    }
+
     read GetRename(repo_id: RepositoryId, dst_cs_id: ChangesetId, dst_path_hash: Vec<u8>) -> (
        ChangesetId,
        Vec<u8>,
@@ -434,6 +551,31 @@ mononoke_queries! {
            AND  mutable_renames.dst_path_hash = {dst_path_hash}
         "
     }
+
+    read ListRenamesByDstChangeset(repo_id: RepositoryId, dst_cs_id: ChangesetId) -> (
+        ChangesetId,
+        Vec<u8>,
+        Vec<u8>,
+        Blake2,
+        i8
+     ) {
+        "
+        SELECT
+            m.src_cs_id,
+            dst_p.path as dst_path,
+            src_p.path as src_path,
+            m.src_unode_id,
+            m.is_tree
+        FROM mutable_renames AS m
+        JOIN mutable_renames_paths AS dst_p
+            ON m.dst_path_hash = dst_p.path_hash
+        JOIN mutable_renames_paths AS src_p
+            ON m.src_path_hash = src_p.path_hash
+        WHERE 
+            m.repo_id = {repo_id}
+            AND m.dst_cs_id = {dst_cs_id}
+        "
+     }
 
     read HasRenameCheck(repo_id: RepositoryId, dst_cs_id: ChangesetId) -> (ChangesetId) {
         "
@@ -455,6 +597,18 @@ mononoke_queries! {
         WHERE
             mutable_renames.repo_id = {repo_id}
             AND mutable_renames.dst_path_hash = {dst_path_hash}
+        "
+    }
+
+    read FindUsedPathHashes(>list path_hashes: &Vec<u8>) -> (Vec<u8>, Vec<u8>) {
+        "
+        SELECT
+            dst_path_hash,
+            src_path_hash
+        FROM mutable_renames
+        WHERE 
+            dst_path_hash IN {path_hashes}
+            OR src_path_hash IN {path_hashes}
         "
     }
 }

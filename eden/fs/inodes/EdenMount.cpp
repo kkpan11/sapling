@@ -264,7 +264,8 @@ EdenMount::EdenMount(
       inodeMap_{new InodeMap(
           this,
           serverState_->getReloadableConfig(),
-          stats.copy())},
+          stats.copy(),
+          serverState_->getStructuredLogger())},
       objectStore_{std::move(objectStore)},
       blobCache_{std::move(blobCache)},
       blobAccess_{objectStore_, blobCache_},
@@ -810,6 +811,18 @@ ImmediateFuture<SetPathObjectIdResultAndTimes> EdenMount::setPathsToObjectIds(
         checkoutMode,
         context->getClientPid(),
         "setPathObjectId",
+        getServerState()
+            ->getReloadableConfig()
+            ->getEdenConfig()
+            ->verifyFilesAfterCheckout.getValue(),
+        getServerState()
+            ->getReloadableConfig()
+            ->getEdenConfig()
+            ->verifyEveryNInvalidations.getValue(),
+        getServerState()
+            ->getReloadableConfig()
+            ->getEdenConfig()
+            ->maxNumberOfInvlidationsToVerify.getValue(),
         nullptr,
         context->getRequestInfo());
 
@@ -1023,7 +1036,7 @@ folly::SemiFuture<SerializedInodeMap> EdenMount::shutdownImpl(bool doTakeover) {
       });
 }
 
-folly::SemiFuture<folly::Unit> EdenMount::unmount() {
+folly::SemiFuture<folly::Unit> EdenMount::unmount(UnmountOptions options) {
   auto mountingUnmountingState = mountingUnmountingState_.wlock();
   if (mountingUnmountingState->fsChannelUnmountStarted()) {
     return mountingUnmountingState->fsChannelUnmountPromise->getFuture();
@@ -1037,7 +1050,7 @@ folly::SemiFuture<folly::Unit> EdenMount::unmount() {
   mountingUnmountingState.unlock();
 
   return std::move(mountFuture)
-      .thenTry([this](Try<Unit>&& mountResult) {
+      .thenTry([this, options](Try<Unit>&& mountResult) {
         if (mountResult.hasException()) {
           return folly::makeSemiFuture();
         }
@@ -1053,7 +1066,8 @@ folly::SemiFuture<folly::Unit> EdenMount::unmount() {
         // TODO: Is it safe to call FsChannel::unmount if the FuseChannel
         // is in the process of starting? Or can we assume that
         // mountResult.hasException() above covers that case?
-        return channel_->unmount();
+
+        return channel_->unmount(options);
       })
       .thenTry([this](Try<Unit>&& result) noexcept -> folly::Future<Unit> {
         auto mountingUnmountingState = mountingUnmountingState_.wlock();
@@ -1427,6 +1441,18 @@ ImmediateFuture<CheckoutResult> EdenMount::checkout(
         checkoutMode,
         fetchContext->getClientPid(),
         thriftMethodCaller,
+        getServerState()
+            ->getReloadableConfig()
+            ->getEdenConfig()
+            ->verifyFilesAfterCheckout.getValue(),
+        getServerState()
+            ->getReloadableConfig()
+            ->getEdenConfig()
+            ->verifyEveryNInvalidations.getValue(),
+        getServerState()
+            ->getReloadableConfig()
+            ->getEdenConfig()
+            ->maxNumberOfInvlidationsToVerify.getValue(),
         progressTracker,
         fetchContext->getRequestInfo());
   }
@@ -1574,12 +1600,14 @@ ImmediateFuture<CheckoutResult> EdenMount::checkout(
            stopWatch,
            oldParent,
            snapshotHash,
-           journalDiffCallback](std::vector<CheckoutConflict>&& conflicts) {
+           journalDiffCallback](
+              CheckoutContext::CheckoutConflictsAndInvalidations&& conflicts) {
             checkoutTimes->didFinish = stopWatch.elapsed();
 
             CheckoutResult result;
             result.times = *checkoutTimes;
-            result.conflicts = std::move(conflicts);
+            result.conflicts = std::move(conflicts.conflicts);
+            result.sampleInodesToValidate = std::move(conflicts.invalidations);
             if (ctx->isDryRun()) {
               // This is a dry run, so all we need to do is tell the caller
               // about the conflicts: we should not modify any files or add
@@ -1607,6 +1635,7 @@ ImmediateFuture<CheckoutResult> EdenMount::checkout(
       .thenTry([this, ctx, stopWatch, oldParent, snapshotHash, checkoutMode](
                    Try<CheckoutResult>&& result) {
         auto fetchStats = ctx->getStatsContext().computeStatistics();
+        auto inodeCounts = getInodeMap()->getInodeCounts();
 
         XLOG(DBG1) << (result.hasValue() ? "" : "failed ") << "checkout for "
                    << this->getPath() << " from " << oldParent << " to "
@@ -1655,7 +1684,11 @@ ImmediateFuture<CheckoutResult> EdenMount::checkout(
             fetchStats.tree.accessCount,
             fetchStats.blob.accessCount,
             fetchStats.blobAuxData.accessCount,
-            numConflicts});
+            numConflicts,
+            inodeCounts.treeCount + inodeCounts.fileCount,
+            inodeCounts.unloadedInodeCount,
+            inodeCounts.periodicLinkedUnloadInodeCount,
+            inodeCounts.periodicUnlinkedUnloadInodeCount});
         return std::move(result);
       });
 }
@@ -2310,7 +2343,7 @@ folly::Future<folly::Unit> EdenMount::fsChannelMount(bool readOnly) {
                           ->fsChannelUnmountStarted()) {
                     fuseDevice->close();
                     return serverState_->getPrivHelper()
-                        ->fuseUnmount(mountPath.view())
+                        ->fuseUnmount(mountPath.view(), {})
                         .thenError(
                             folly::tag<std::exception>,
                             [](std::exception&& unmountError) {

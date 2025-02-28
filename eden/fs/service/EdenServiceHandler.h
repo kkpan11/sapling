@@ -113,6 +113,9 @@ class EdenServiceHandler : virtual public StreamingEdenServiceSvIf,
   folly::SemiFuture<folly::Unit> semifuture_unmount(
       std::unique_ptr<std::string> mountPoint) override;
 
+  folly::SemiFuture<folly::Unit> semifuture_unmountV2(
+      std::unique_ptr<UnmountArgument> unmountArg) override;
+
   void listMounts(std::vector<MountInfo>& results) override;
 
   folly::SemiFuture<std::unique_ptr<std::vector<CheckoutConflict>>>
@@ -456,6 +459,21 @@ class EdenServiceHandler : virtual public StreamingEdenServiceSvIf,
    * stored in a thread local variable.
    */
   OptionalProcessId getAndRegisterClientPid();
+
+  folly::SemiFuture<std::unique_ptr<StartFileAccessMonitorResult>>
+  semifuture_startFileAccessMonitor(
+      std::unique_ptr<StartFileAccessMonitorParams> params) override;
+
+  folly::SemiFuture<std::unique_ptr<StopFileAccessMonitorResult>>
+  semifuture_stopFileAccessMonitor() override;
+
+  void sendNotification(
+      SendNotificationResponse& response,
+      std::unique_ptr<SendNotificationRequest> request) override;
+
+  void listRedirections(
+      ListRedirectionsResponse& response,
+      std::unique_ptr<ListRedirectionsRequest> request) override;
 
  private:
   EdenMountHandle lookupMount(const MountId& mountId);

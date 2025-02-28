@@ -14,7 +14,7 @@
   A=aa53d24251ff3f54b1b2c29ae02826701b2abeb0079f1bb13b8434b54cd87675
   B=f8c75e41a0c4d29281df765f39de47bca1dcadfdc55ada4ccc2f6df567201658
   C=e32a1e342cdb1e38e88466b4c1a01ae9f410024017aa21dc0a1c5da6b3963bf2
-  $ mononoke_admin derived-data -R repo derive -T git_trees -T git_commits -T git_delta_manifests_v2 -T unodes --all-bookmarks
+  $ mononoke_admin derived-data -R repo derive -T git_commits -T git_delta_manifests_v2 -T unodes --all-bookmarks
   $ mononoke_admin git-symref -R repo create --symref-name HEAD --ref-name master_bookmark --ref-type branch
   Symbolic ref HEAD pointing to branch master_bookmark has been added
 
@@ -24,8 +24,7 @@
 
 # Clone the Git repo from Mononoke
   $ CLONE_URL="$MONONOKE_GIT_SERVICE_BASE_URL/repo.git"
-  $ git_client clone "$CLONE_URL"
-  Cloning into 'repo'...
+  $ quiet git_client clone "$CLONE_URL"
 
 # Push with legacy server configures to check if the LFS files end up in mononoke anyway
 # The LFS file is uploaded to LEGACY server but the mononoke_git_service won't look there.

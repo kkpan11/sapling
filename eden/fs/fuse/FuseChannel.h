@@ -390,7 +390,8 @@ class FuseChannel final : public FsChannel {
    * FuseChannel. The future returned by initialize() will be fulfilled with a
    * non-takeover StopData.
    */
-  FOLLY_NODISCARD folly::SemiFuture<folly::Unit> unmount() override;
+  FOLLY_NODISCARD folly::SemiFuture<folly::Unit> unmount(
+      UnmountOptions options) override;
 
   /**
    * Request that the FuseChannel stop processing new requests, and prepare
@@ -405,7 +406,7 @@ class FuseChannel final : public FsChannel {
    * Request that the kernel invalidate its cached data for the specified
    * inode.
    *
-   * This operation is performed asynchronously.  flushInvalidations() can be
+   * This operation is performed asynchronously.  completeInvalidations() can be
    * called if you need to determine when this operation has completed.
    *
    * @param ino the inode number
@@ -419,7 +420,7 @@ class FuseChannel final : public FsChannel {
    * Request that the kernel invalidate its cached data for the specified
    * directory entry.
    *
-   * This operation is performed asynchronously.  flushInvalidations() can be
+   * This operation is performed asynchronously.  completeInvalidations() can be
    * called if you need to determine when this operation has completed.
    *
    * @param parent inode number
@@ -431,7 +432,7 @@ class FuseChannel final : public FsChannel {
    * Request that the kernel invalidate its cached data for the specified
    * inodes.
    *
-   * This operation is performed asynchronously.  flushInvalidations() can be
+   * This operation is performed asynchronously.  completeInvalidations() can be
    * called if you need to determine when this operation has completed.
    *
    * @param range a range of inodes

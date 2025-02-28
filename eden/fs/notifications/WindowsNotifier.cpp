@@ -47,6 +47,7 @@ const wchar_t kOptionEnable[] = L"Enable Notifications";
 enum MenuCommand : UINT {
   IDM_ACTION_CLEAN = 124,
   IDM_ACTION_DOCTOR,
+  IDM_ACTION_HEALTH_REPORT,
   IDM_ACTION_LIST,
   IDM_ACTION_RAGE,
   IDM_ACTION_SHOW_LOGS,
@@ -60,6 +61,7 @@ enum MenuCommand : UINT {
   IDM_REPORT_BUG,
   IDM_SIGNAL_CHECKOUT,
   IDM_TOGGLE_NOTIFICATIONS,
+  IDM_RESTART_EDENFS,
 };
 
 void check(bool opResult, std::string_view context) {
@@ -276,6 +278,9 @@ void showWinNotification(HWND hwnd, const WindowsNotification& notif) {
   // respect quiet time since this balloon did not come from a direct user
   // TODO(@cuev): maybe we should force notifications for more critical issues
   iconData.dwInfoFlags = NIIF_WARNING | NIIF_RESPECT_QUIET_TIME;
+  if (notif.title.compare("EdenFS ready for use") == 0) {
+    iconData.dwInfoFlags = NIIF_INFO;
+  }
   std::wstring title = multibyteToWideString(notif.title);
   StringCchPrintfW(
       iconData.szInfoTitle,
@@ -290,7 +295,10 @@ void showWinNotification(HWND hwnd, const WindowsNotification& notif) {
       "Failed to show E-Menu notification");
 }
 
-void executeShellCommand(std::string_view cmd, std::string_view params) {
+void executeShellCommand(
+    std::string_view cmd,
+    std::string_view params,
+    std::string_view cwd = "") {
   SHELLEXECUTEINFOW pExecInfo = {};
   pExecInfo.cbSize = sizeof(pExecInfo);
   // TODO(@cuev): Allow users to specify what shell they want us to
@@ -302,6 +310,10 @@ void executeShellCommand(std::string_view cmd, std::string_view params) {
   pExecInfo.lpFile = cmdStr.c_str();
   pExecInfo.lpParameters = paramsStr.c_str();
   pExecInfo.nShow = SW_SHOWNORMAL;
+  if (!cwd.empty()) {
+    auto cwdStr = multibyteToWideString(cwd);
+    SetCurrentDirectoryW(cwdStr.c_str());
+  }
   auto errStr = fmt::format("Failed to excute command: {} {}", cmd, params);
   checkNonZero(ShellExecuteExW(&pExecInfo), errStr);
 }
@@ -391,8 +403,20 @@ WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) noexcept {
             return 0;
           }
 
+          case IDM_RESTART_EDENFS: {
+            executeShellCommand(
+                "edenfsctl", "--press-to-continue restart", "/");
+            return 0;
+          }
+
           case IDM_ACTION_DOCTOR: {
             executeShellCommand("edenfsctl", "--press-to-continue doctor");
+            return 0;
+          }
+
+          case IDM_ACTION_HEALTH_REPORT: {
+            executeShellCommand(
+                "edenfsctl", "--press-to-continue health-report");
             return 0;
           }
 
@@ -777,6 +801,11 @@ void WindowsNotifier::appendActionsMenu(HMENU hMenu) {
   appendMenuEntry(
       actionMenu.get(),
       MF_BYPOSITION | MF_STRING,
+      IDM_ACTION_HEALTH_REPORT,
+      L"Diagnose EdenFS Health Issues (health-report)");
+  appendMenuEntry(
+      actionMenu.get(),
+      MF_BYPOSITION | MF_STRING,
       IDM_ACTION_RAGE,
       L"Collect Diagnostics (rage)");
   appendMenuEntry(
@@ -800,7 +829,7 @@ void WindowsNotifier::appendActionsMenu(HMENU hMenu) {
       hMenu,
       MF_BYPOSITION | MF_POPUP,
       reinterpret_cast<UINT_PTR>(actionMenu.get()),
-      L"Actions");
+      L"Diagnostics");
 }
 
 MenuHandle WindowsNotifier::createEdenMenu() {
@@ -814,8 +843,13 @@ MenuHandle WindowsNotifier::createEdenMenu() {
   appendInodePopulationReportMenu(hMenu.get());
   appendMenuEntry(
       hMenu.get(), MF_BYPOSITION | MF_STRING, IDM_INFO, kMenuAboutStr);
-  appendOptionsMenu(hMenu.get());
+  appendMenuEntry(
+      hMenu.get(),
+      MF_BYPOSITION | MF_STRING,
+      IDM_RESTART_EDENFS,
+      L"Restart EdenFS");
   appendActionsMenu(hMenu.get());
+  appendOptionsMenu(hMenu.get());
   if (debugIsEnabled()) {
     appendDebugMenu(hMenu.get());
   }
@@ -898,6 +932,12 @@ void WindowsNotifier::showNetworkNotification(const std::exception& /*err*/) {
   constexpr std::string_view body = "EdenFS is experiencing network issues";
   constexpr std::string_view title = "EdenFS Network Error";
   showNotification(title, body);
+}
+
+void WindowsNotifier::showHealthReportNotification(
+    std::string_view notifTitle,
+    std::string_view notifBody) {
+  showNotification(notifTitle, notifBody);
 }
 
 bool WindowsNotifier::debugIsEnabled() {

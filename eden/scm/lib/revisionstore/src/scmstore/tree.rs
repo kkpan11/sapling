@@ -35,6 +35,9 @@ use edenapi_types::TreeChildEntry;
 use fetch::FetchState;
 use minibytes::Bytes;
 use once_cell::sync::OnceCell;
+use progress_model::AggregatingProgressBar;
+use progress_model::ProgressBar;
+use progress_model::Registry;
 use storemodel::BoxIterator;
 use storemodel::InsertOpts;
 use storemodel::KeyStore;
@@ -54,8 +57,6 @@ use crate::scmstore::tree::types::LazyTree;
 use crate::scmstore::tree::types::StoreTree;
 use crate::scmstore::tree::types::TreeAttributes;
 use crate::trait_impls::sha1_digest;
-use crate::ContentDataStore;
-use crate::ContentMetadata;
 use crate::Delta;
 use crate::HgIdHistoryStore;
 use crate::HgIdMutableDeltaStore;
@@ -122,6 +123,10 @@ pub struct TreeStore {
     pub fetch_tree_aux_data: bool,
 
     pub format: SerializationFormat,
+
+    // This bar "aggregates" across concurrent uses of this TreeStore from different
+    // threads (so that only a single progress bar shows up to the user).
+    pub(crate) progress_bar: Arc<AggregatingProgressBar>,
 }
 
 impl Drop for TreeStore {
@@ -144,9 +149,12 @@ impl TreeStore {
             return FetchResults::new(Box::new(std::iter::empty()));
         }
 
+        let bar = self.progress_bar.create_or_extend_local(0);
+
         let (found_tx, found_rx) = unbounded();
+
         let found_tx2 = found_tx.clone();
-        let mut state = FetchState::new(reqs, attrs, found_tx, fetch_mode);
+        let mut state = FetchState::new(reqs, attrs, found_tx, fetch_mode, bar.clone());
 
         if tracing::enabled!(target: "tree_fetches", tracing::Level::TRACE) {
             let attrs = [
@@ -169,6 +177,8 @@ impl TreeStore {
         }
 
         let keys_len = state.common.pending_len();
+
+        bar.increase_total(keys_len as u64);
 
         let indexedlog_cache = self.indexedlog_cache.clone();
         let indexedlog_local = self.indexedlog_local.clone();
@@ -204,6 +214,10 @@ impl TreeStore {
         );
 
         let process_func = move || -> Result<()> {
+            // We might be in a different thread than when `bar` was created - set bar as
+            // active here as well.
+            let _bar = ProgressBar::push_active(bar, Registry::main());
+
             // Handle queries for null tree id (with null content response). scmstore is
             // the end of the line, so if we consistently handle null id then callers at
             // any level can confidently assume null tree ids are handled.
@@ -276,6 +290,8 @@ impl TreeStore {
                         .map(|(key, _attrs)| key.clone())
                         .collect();
 
+                    let bar = ProgressBar::new_adhoc("IndexedLog", pending.len() as u64, "trees");
+
                     let store_metrics = state.metrics.indexedlog.store(location);
                     let fetch_count = pending.len();
 
@@ -283,13 +299,12 @@ impl TreeStore {
 
                     let mut found_count: usize = 0;
                     for key in pending.into_iter() {
-                        if let Some(entry) = log.get_entry(key)? {
-                            tracing::trace!("{:?} found in {:?}", entry.key(), location);
-                            state
-                                .common
-                                .found(entry.key().clone(), LazyTree::IndexedLog(entry).into());
+                        if let Some(entry) = log.get_entry(&key.hgid)? {
+                            tracing::trace!("{:?} found in {:?}", key, location);
+                            state.common.found(key, LazyTree::IndexedLog(entry).into());
                             found_count += 1;
                         }
+                        bar.increase_position(1);
                     }
 
                     store_metrics.hit(found_count);
@@ -402,7 +417,11 @@ impl TreeStore {
         // Only kick off a thread if there's a substantial amount of work.
         if keys_len > 1000 {
             let cri = get_client_request_info_thread_local();
+            let active_bar = Registry::main().get_active_progress_bar();
             std::thread::spawn(move || {
+                // Propagate parent progress bar into the thread so things nest well.
+                Registry::main().set_active_progress_bar(active_bar);
+
                 if let Some(cri) = cri {
                     set_client_request_info_thread_local(cri);
                 }
@@ -418,7 +437,7 @@ impl TreeStore {
     fn write_batch(&self, entries: impl Iterator<Item = (Key, Bytes, Metadata)>) -> Result<()> {
         if let Some(ref indexedlog_local) = self.indexedlog_local {
             for (key, bytes, meta) in entries {
-                indexedlog_local.put_entry(Entry::new(key, bytes, meta))?;
+                indexedlog_local.put_entry(Entry::new(key.hgid, bytes, meta))?;
             }
         }
         Ok(())
@@ -440,6 +459,7 @@ impl TreeStore {
             fetch_tree_aux_data: false,
             prefetch_tree_parents: false,
             format: SerializationFormat::Hg,
+            progress_bar: AggregatingProgressBar::new("", ""),
         }
     }
 
@@ -502,6 +522,7 @@ impl TreeStore {
             fetch_tree_aux_data: false,
             prefetch_tree_parents: false,
             format: self.format(),
+            progress_bar: self.progress_bar.clone(),
         }
     }
 
@@ -527,28 +548,6 @@ impl HgIdDataStore for TreeStore {
                 .single()?
             {
                 Some(entry) => StoreResult::Found(entry.content.expect("content attribute not found despite being requested and returned as complete").hg_content()?.into_vec()),
-                None => StoreResult::NotFound(key),
-            },
-        )
-    }
-
-    fn get_meta(&self, key: StoreKey) -> Result<StoreResult<Metadata>> {
-        Ok(
-            match self
-                .fetch_batch(
-                    std::iter::once(key.clone()).filter_map(StoreKey::maybe_into_key),
-                    TreeAttributes::CONTENT,
-                    FetchMode::AllowRemote,
-                )
-                .single()?
-            {
-                // This is currently in a bit of an awkward state, as revisionstore metadata is no longer used for trees
-                // (it should always be default), but the get_meta function should return StoreResult::Found
-                // only when the content is available. Thus, we request the tree content, but ignore it and just
-                // return default metadata when it's found, and otherwise report StoreResult::NotFound.
-                // TODO(meyer): Replace this with an presence check once support for separate fetch and return attrs
-                // is added.
-                Some(_e) => StoreResult::Found(Metadata::default()),
                 None => StoreResult::NotFound(key),
             },
         )
@@ -682,19 +681,6 @@ impl RemoteHistoryStore for TreeStore {
 impl HistoryStore for TreeStore {
     fn with_shared_only(&self) -> Arc<dyn HistoryStore> {
         Arc::new(self.with_shared_only())
-    }
-}
-
-// TODO(meyer): Content addressing not supported at all for trees. I could look for HgIds present here and fetch with
-// that if available, but I feel like there's probably something wrong if this is called for trees. Do we need to implement
-// this at all for trees?
-impl ContentDataStore for TreeStore {
-    fn blob(&self, key: StoreKey) -> Result<StoreResult<Bytes>> {
-        Ok(StoreResult::NotFound(key))
-    }
-
-    fn metadata(&self, key: StoreKey) -> Result<StoreResult<ContentMetadata>> {
-        Ok(StoreResult::NotFound(key))
     }
 }
 

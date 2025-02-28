@@ -41,6 +41,7 @@ struct Name {
 }
 
 @scope.Struct
+@scope.Union
 struct Copy {
 // # `rust.Copy`
 //
@@ -275,7 +276,7 @@ struct Type {
 @scope.Enum
 @scope.Union
 struct Serde {
-  1: bool enabled;
+  1: bool enabled = true;
 }
 
 // # `rust.Mod`
@@ -337,6 +338,7 @@ struct Adapter {
 
 @scope.Enum
 @scope.Struct
+@scope.Union
 struct Derive {
   // List of additional derives to apply to the generated struct.
   //

@@ -5,10 +5,18 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+import type {ReactNode} from 'react';
 import type {Operation} from './operations/Operation';
 import type {ValidatedRepoInfo} from './types';
-import type {ReactNode} from 'react';
 
+import {Banner, BannerKind} from 'isl-components/Banner';
+import {Button} from 'isl-components/Button';
+import {Column, Row} from 'isl-components/Flex';
+import {Icon} from 'isl-components/Icon';
+import {Subtle} from 'isl-components/Subtle';
+import {Tooltip} from 'isl-components/Tooltip';
+import {atom, useAtom, useAtomValue} from 'jotai';
+import {notEmpty, truncate} from 'shared/utils';
 import {Delayed} from './Delayed';
 import {LogRenderExposures} from './analytics/LogRenderExposures';
 import {codeReviewProvider} from './codeReview/CodeReviewInfo';
@@ -24,14 +32,6 @@ import {repositoryInfo} from './serverAPIState';
 import {processTerminalLines} from './terminalOutput';
 import {CommandRunner} from './types';
 import {short} from './utils';
-import {Banner, BannerKind} from 'isl-components/Banner';
-import {Button} from 'isl-components/Button';
-import {Column, Row} from 'isl-components/Flex';
-import {Icon} from 'isl-components/Icon';
-import {Subtle} from 'isl-components/Subtle';
-import {Tooltip} from 'isl-components/Tooltip';
-import {atom, useAtom, useAtomValue} from 'jotai';
-import {notEmpty, truncate} from 'shared/utils';
 
 import './CommandHistoryAndProgress.css';
 
@@ -110,7 +110,7 @@ export function CommandHistoryAndProgress() {
   const [errorCollapsed, setErrorCollapsed] = useAtom(queueErrorCollapsedAtom);
 
   const info = useAtomValue(repositoryInfo);
-  if (info?.type !== 'success') {
+  if (!info) {
     return null;
   }
 
@@ -174,7 +174,12 @@ export function CommandHistoryAndProgress() {
     showLastLineOfOutput = true;
   }
 
-  const processedLines = processTerminalLines(progress.commandOutput ?? []);
+  let processedLines = processTerminalLines(progress.commandOutput ?? []);
+  if (desc?.tooltip != null) {
+    // Output might contain a JSON string not suitable for human reading.
+    // Filter the line out.
+    processedLines = processedLines.filter(line => !line.startsWith('{'));
+  }
 
   return (
     <div className="progress-container" data-testid="progress-container">
@@ -247,21 +252,21 @@ export function CommandHistoryAndProgress() {
                   <strong>Command: </strong>
                   <OperationDescription info={info} operation={progress.operation} long />
                 </div>
-                <br />
-                <b>Command output:</b>
-                <br />
-                {processedLines.length === 0 ? (
-                  <Subtle>
-                    <T>No output</T>
-                  </Subtle>
-                ) : (
-                  <pre>
-                    {processedLines.map((line, i) => (
-                      <div key={i}>{line}</div>
-                    ))}
-                  </pre>
-                )}
               </>
+            )}
+            <br />
+            <b>Command output:</b>
+            <br />
+            {processedLines.length === 0 ? (
+              <Subtle>
+                <T>No output</T>
+              </Subtle>
+            ) : (
+              <pre>
+                {processedLines.map((line, i) => (
+                  <div key={i}>{line}</div>
+                ))}
+              </pre>
             )}
           </div>
         )}>

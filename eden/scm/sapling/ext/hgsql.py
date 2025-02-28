@@ -39,6 +39,7 @@ from __future__ import absolute_import
 
 import hashlib
 import os
+import queue as queuemod
 import sys
 import threading
 import time
@@ -61,7 +62,6 @@ from sapling import (
     lock as lockmod,
     mdiff,
     progress,
-    pycompat,
     registrar,
     repair,
     revlog,
@@ -70,8 +70,6 @@ from sapling import (
 )
 from sapling.i18n import _
 from sapling.node import bin, hex, nullid, nullrev
-from sapling.pycompat import decodeutf8, encodeutf8, queue, range
-
 
 wrapcommand = extensions.wrapcommand
 wrapfunction = extensions.wrapfunction
@@ -674,11 +672,15 @@ def executewithsql(repo, action, sqllock: bool = False, *args, **kwargs):
         wlock = util.nullcontextmanager()
         lock = util.nullcontextmanager()
 
-    with wlock, lock, sqlcontext(
-        repo,
-        dbwritable=sqllock,
-        enforcepullfromdb=enforcepullfromdb,
-        syncfromreplica=syncfromreplica,
+    with (
+        wlock,
+        lock,
+        sqlcontext(
+            repo,
+            dbwritable=sqllock,
+            enforcepullfromdb=enforcepullfromdb,
+            syncfromreplica=syncfromreplica,
+        ),
     ):
         return action(*args, **kwargs)
 
@@ -918,7 +920,7 @@ def wraprepo(repo) -> None:
             for k, v in sorted(refs.items()):
                 if k != "tip":
                     v = hex(v)
-                sha = hashlib.sha1(encodeutf8("%s%s%s" % (sha, k, v))).hexdigest()
+                sha = hashlib.sha1(("%s%s%s" % (sha, k, v)).encode()).hexdigest()
             return sha
 
         def _sqlsynchash(self):
@@ -942,12 +944,12 @@ def wraprepo(repo) -> None:
             ]
             # is it a new repo with empty references?
             if sqlresults == [[]]:
-                return hashlib.sha1(encodeutf8("%s%s" % ("tip", -1))).hexdigest()
+                return hashlib.sha1(("%s%s" % ("tip", -1)).encode()).hexdigest()
             # sqlresults looks like [[('59237a7416a6a1764ea088f0bc1189ea58d5b592',)]]
             sqlsynchash = sqlresults[0][0][0]
             if len(sqlsynchash) != 40:
                 raise RuntimeError("malicious SHA1 returned by MySQL: %r" % sqlsynchash)
-            return decodeutf8(sqlsynchash)
+            return sqlsynchash.decode()
 
         def needsync(self):
             """Returns True if the local repo is not in sync with the database.
@@ -967,7 +969,7 @@ def wraprepo(repo) -> None:
                 if namespace == b"heads":
                     sqlheads.add(bin(value))
                 elif namespace == b"bookmarks":
-                    sqlbookmarks[decodeutf8(name)] = bin(value)
+                    sqlbookmarks[name.decode()] = bin(value)
                 elif namespace == b"tip":
                     tip = int(value)
 
@@ -1120,7 +1122,7 @@ def wraprepo(repo) -> None:
                     # Inspect the changelog now that we have the lock
                     fetchstart = len(self.changelog)
 
-                    q = queue.Queue()
+                    q = queuemod.Queue()
                     abort = threading.Event()
 
                     t = threading.Thread(
@@ -1182,7 +1184,7 @@ def wraprepo(repo) -> None:
                         (self.sqlreponame,),
                     )
                     fetchedbookmarks = [
-                        (decodeutf8(name), node)
+                        (name.decode(), node)
                         for name, node in self.sqlcursor.fetchall()
                     ]
 
@@ -1212,7 +1214,7 @@ def wraprepo(repo) -> None:
             # that don't exist in the loaded changelog. So let's force loading
             # bookmarks now.
             bm = self._bookmarks
-            self.sharedvfs.write("lastsqlsync", encodeutf8(str(int(time.time()))))
+            self.sharedvfs.write("lastsqlsync", str(int(time.time())).encode())
 
         def fetchthread(self, queue, abort, fetchstart, fetchend):
             """Fetches every revision from fetchstart to fetchend (inclusive)
@@ -1237,7 +1239,7 @@ def wraprepo(repo) -> None:
                     # Put split chunks back together into a single revision
                     groupedrevdata = {}
                     for revdata in self.sqlcursor:
-                        revdata = (decodeutf8(revdata[0]),) + revdata[1:]
+                        revdata = (revdata[0].decode(),) + revdata[1:]
 
                         name = revdata[0]
                         chunk = revdata[1]
@@ -1266,7 +1268,7 @@ def wraprepo(repo) -> None:
                         break
 
                     fullrevisions = []
-                    for chunks in pycompat.itervalues(groupedrevdata):
+                    for chunks in groupedrevdata.values():
                         chunkcount = chunks[0][2]
                         if chunkcount == 1:
                             fullrevisions.append(chunks[0])
@@ -1316,7 +1318,7 @@ def wraprepo(repo) -> None:
             )
             headsindb = cursor.fetchall()
             for head in headsindb:
-                head = decodeutf8(head[0])
+                head = head[0].decode()
                 if head in newheads:
                     newheads.discard(head)
                 else:
@@ -1344,8 +1346,8 @@ def wraprepo(repo) -> None:
             )
             bookmarksindb = cursor.fetchall()
             for k, v in bookmarksindb:
-                k = decodeutf8(k)
-                v = decodeutf8(v)
+                k = k.decode()
+                v = v.decode()
                 if newbookmarks.get(k) == v:
                     del newbookmarks[k]
                 else:
@@ -1631,8 +1633,8 @@ def wraprepo(repo) -> None:
                 )
 
                 for path, rev, node in cursor:
-                    path = decodeutf8(path)
-                    node = decodeutf8(node)
+                    path = path.decode()
+                    node = node.decode()
                     rev = int(rev)
                     checkrevs.remove((path, rev))
                     rl = None
@@ -1836,7 +1838,7 @@ def addentries(repo, queue, transaction, ignoreexisting: bool = False) -> None:
         if revlog.dfh and not revlog.dfh.closed:
             revlog.dfh.flush()
 
-    for filelog in pycompat.itervalues(revlogs):
+    for filelog in revlogs.values():
         flushrevlog(filelog)
 
     if manifest:
@@ -2126,7 +2128,7 @@ def sqlrecover(ui, *args, **opts) -> None:
 
     global initialsync
     initialsync = INITIAL_SYNC_DISABLE
-    repo = hg.repository(ui, pycompat.getcwd())
+    repo = hg.repository(ui, os.getcwd())
     repo.disablesync = True
 
     if repo.recover():
@@ -2375,7 +2377,7 @@ def sqlrefill(ui, startrev: int, **opts) -> None:
     if not opts.get("skip_initial_sync"):
         global initialsync
         initialsync = INITIAL_SYNC_DISABLE
-        repo = hg.repository(ui, pycompat.getcwd())
+        repo = hg.repository(ui, os.getcwd())
         repo.disablesync = True
 
     startrev = int(startrev)
@@ -2465,7 +2467,7 @@ def sqlstrip(ui, rev: int, *args, **opts) -> None:
 
     global initialsync
     initialsync = INITIAL_SYNC_DISABLE
-    repo = hg.repository(ui, pycompat.getcwd())
+    repo = hg.repository(ui, os.getcwd())
     repo.disablesync = True
 
     try:
@@ -2565,7 +2567,7 @@ def _sqlreplay(repo, startrev, endrev) -> None:
 
         try:
             repo.sqlreplaytransaction = True
-            q = queue.Queue()
+            q = queuemod.Queue()
             abort = threading.Event()
 
             t = threading.Thread(
@@ -2663,7 +2665,7 @@ def sqlverify(ui, repo, *args, **opts) -> None:
 
 
 def _sqlverify(repo, minrev, maxrev, revlogcache):
-    q = queue.Queue()
+    q = queuemod.Queue()
     abort = threading.Event()
     t = threading.Thread(target=repo.fetchthread, args=(q, abort, minrev, maxrev))
     t.daemon = True

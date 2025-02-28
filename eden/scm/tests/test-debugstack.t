@@ -461,6 +461,31 @@ Import stack:
         $ hg cat -r . b.txt
         content
 
+      # Work with dirsync.
+
+        $ newrepo
+        $ enable dirsync
+        $ cat > .hgdirsync << EOF
+        > [dirsync]
+        > sync1.1=dir1/
+        > sync1.2=dir2/
+        > EOF
+        $ sl commit -A .hgdirsync -m 'Add dirsync config'
+        $ sl debugimportstack --debug --verbose << EOS
+        > [["commit", {"author": "test1", "date": [0, 0], "text": "Add dir1/A", "mark": ":1", "parents": ["."],
+        >   "files": {"dir1/A": {"data": "A"}}}],
+        >  ["goto", {"mark": ":1"}]]
+        > EOS
+        mirrored adding 'dir1/A' to 'dir2/A'
+        committing files:
+        dir1/A
+        dir2/A
+        committing manifest
+        committing changelog
+        {":1": "c2a84efd1be66cfa14cf13516061f7e7eee15183"}
+        $ cat dir2/A
+        A (no-eol)
+
       # Error cases.
 
         $ hg debugimportstack << EOS

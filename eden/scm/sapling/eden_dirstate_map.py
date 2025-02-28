@@ -15,7 +15,6 @@ from . import (
     EdenThriftClient,
     localrepo,
     node,
-    pycompat,
     treestate,
     ui as ui_mod,
     util,
@@ -33,7 +32,7 @@ DUMMY_MTIME = 0
 modefromflag: Dict[str, int] = {
     "": stat.S_IFREG | 0o644,
     "x": stat.S_IFREG | 0o755,
-    "l": (stat.S_IFREG if pycompat.iswindows else stat.S_IFLNK) | 0o755,
+    "l": (stat.S_IFREG if util.iswindows else stat.S_IFLNK) | 0o755,
     "t": stat.S_IFDIR | 0o755,
 }
 
@@ -127,10 +126,8 @@ class eden_dirstate_map(treestate.treestatemap):
         for k in self._keys():
             self._tree.remove(k)
 
-    def iteritems(self):
-        raise RuntimeError(
-            "Should not pycompat.iteritems(invoke) on eden_dirstate_map!"
-        )
+    def items(self):
+        raise RuntimeError("Should not iterate eden_dirstate_map!")
 
     def __len__(self):
         raise RuntimeError("Should not invoke __len__ on eden_dirstate_map!")

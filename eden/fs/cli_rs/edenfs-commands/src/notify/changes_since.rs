@@ -12,8 +12,11 @@ use std::path::PathBuf;
 use anyhow::Result;
 use async_trait::async_trait;
 use clap::Parser;
+use edenfs_client::types::ChangesSinceV2Result;
 use edenfs_client::types::JournalPosition;
 use edenfs_client::EdenFsInstance;
+use edenfs_error::EdenFsError;
+use edenfs_error::ResultExt;
 use hg_util::path::expand_path;
 
 use crate::ExitCode;
@@ -71,6 +74,25 @@ pub struct ChangesSinceCmd {
 
     #[clap(long, help = "Print the output in JSON format")]
     json: bool,
+
+    #[clap(short, long, default_value = "0")]
+    /// [Unit: ms] number of milliseconds to wait between events
+    throttle: u64,
+}
+
+impl ChangesSinceCmd {
+    fn print_result(&self, result: &ChangesSinceV2Result) -> Result<(), EdenFsError> {
+        println!(
+            "{}",
+            if self.json {
+                serde_json::to_string(&result).from_err()? + "\n"
+            } else {
+                result.to_string()
+            }
+        );
+
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -101,17 +123,22 @@ impl crate::Subcommand for ChangesSinceCmd {
                 None,
             )
             .await?;
-        println!(
-            "{}",
-            if self.json {
-                serde_json::to_string(&result)?
-            } else {
-                result.to_string()
-            }
-        );
 
+        self.print_result(&result)?;
         if self.subscribe {
-            println!("Getting changes since {}", result.to_position);
+            instance
+                .subscribe(
+                    &self.mount_point,
+                    self.throttle,
+                    Some(position),
+                    self.include_vcs_roots,
+                    &self.included_roots,
+                    &self.excluded_roots,
+                    &self.included_suffixes,
+                    &self.excluded_suffixes,
+                    |result| self.print_result(result),
+                )
+                .await?;
         }
         Ok(0)
     }

@@ -2,7 +2,7 @@
   "name": "sapling-scm",
   "displayName": "Sapling SCM",
   "description": "Sapling: A Scalable, User-Friendly Source Control System",
-  "version": "0.1.65",
+  "version": "0.1.66",
   "publisher": "meta",
   "license": "MIT",
   "engines": {
@@ -205,6 +205,12 @@
         "key": "alt-shift-g",
         "mac": "alt-shift-g",
         "when": "isl.inlineCommentSidePanelEnabled && activeWebviewPanelId != 'sapling.comments'"
+      },
+      {
+        "command": "sapling.toggle-inline-comments",
+        "key": "alt-shift-t",
+        "mac": "alt-shift-t",
+        "when": "isl.inlineCommentSidePanelEnabled"
       }
     ],
     "menus": {

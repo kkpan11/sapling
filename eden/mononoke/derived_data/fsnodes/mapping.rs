@@ -14,12 +14,20 @@ use async_trait::async_trait;
 use blobstore::Blobstore;
 use blobstore::BlobstoreGetData;
 use bytes::Bytes;
+use cloned::cloned;
 use context::CoreContext;
 use derived_data_manager::dependencies;
 use derived_data_manager::BonsaiDerivable;
 use derived_data_manager::DerivableType;
 use derived_data_manager::DerivationContext;
 use derived_data_service_if as thrift;
+use futures::stream;
+use futures::FutureExt;
+use futures::StreamExt;
+use futures::TryStreamExt;
+use manifest::ManifestOps;
+use manifest::ManifestParentReplacement;
+use mononoke_types::fsnode::FsnodeFile;
 use mononoke_types::BlobstoreBytes;
 use mononoke_types::BonsaiChangeset;
 use mononoke_types::ChangesetId;
@@ -83,6 +91,7 @@ impl BonsaiDerivable for RootFsnodeId {
         derivation_ctx: &DerivationContext,
         bonsai: BonsaiChangeset,
         parents: Vec<Self>,
+        known: Option<&HashMap<ChangesetId, Self>>,
     ) -> Result<Self, Error> {
         let fsnode_id = derive_fsnode(
             ctx,
@@ -92,6 +101,7 @@ impl BonsaiDerivable for RootFsnodeId {
                 .map(|root_fsnode_id| root_fsnode_id.into_fsnode_id())
                 .collect(),
             get_file_changes(&bonsai),
+            get_fsnode_subtree_changes(ctx, derivation_ctx, known, &bonsai).await?,
         )
         .await?;
         Ok(RootFsnodeId(fsnode_id))
@@ -165,6 +175,51 @@ pub(crate) fn get_file_changes(
             )
         })
         .collect()
+}
+
+pub async fn get_fsnode_subtree_changes(
+    ctx: &CoreContext,
+    derivation_ctx: &DerivationContext,
+    known: Option<&HashMap<ChangesetId, RootFsnodeId>>,
+    bcs: &BonsaiChangeset,
+) -> Result<Vec<ManifestParentReplacement<FsnodeId, FsnodeFile>>> {
+    let copy_sources = bcs
+        .subtree_changes()
+        .iter()
+        .filter_map(|(path, change)| {
+            let (from_cs_id, from_path) = change.copy_source()?;
+            Some((path, from_cs_id, from_path))
+        })
+        .collect::<Vec<_>>();
+    stream::iter(copy_sources)
+        .map(|(path, from_cs_id, from_path)| {
+            cloned!(ctx);
+            let blobstore = derivation_ctx.blobstore().clone();
+            async move {
+                let root = derivation_ctx
+                    .fetch_unknown_dependency::<RootFsnodeId>(&ctx, known, from_cs_id)
+                    .await?
+                    .into_fsnode_id();
+                let entry = root
+                    .find_entry(ctx, blobstore, from_path.clone())
+                    .await?
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "Subtree copy source {} does not exist in {}",
+                            from_path,
+                            from_cs_id
+                        )
+                    })?;
+                Ok(ManifestParentReplacement {
+                    path: path.clone(),
+                    replacements: vec![entry],
+                })
+            }
+        })
+        .buffered(100)
+        .try_collect()
+        .boxed()
+        .await
 }
 
 #[cfg(test)]

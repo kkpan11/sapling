@@ -21,13 +21,13 @@ use futures::stream::BoxStream;
 use futures::stream::FuturesOrdered;
 use futures::StreamExt as _;
 use futures::TryStreamExt;
+use futures_stats::TimedTryFutureExt;
 use git_types::fetch_git_delta_manifest;
-use git_types::mode;
-use git_types::DeltaObjectKind;
+use git_types::fetch_non_blob_git_object;
+use git_types::tree::GitEntry;
 use git_types::GitDeltaManifestEntryOps;
 use git_types::GitIdentifier;
-use git_types::TreeHandle;
-use git_types::TreeMember;
+use git_types::GitTreeId;
 use gix_hash::ObjectId;
 use manifest::ManifestOps;
 use mononoke_types::hash::GitSha1;
@@ -35,12 +35,16 @@ use mononoke_types::path::MPath;
 use mononoke_types::ChangesetId;
 use packfile::types::PackfileItem;
 use rustc_hash::FxHashSet;
+use scuba_ext::FutureStatsScubaExt;
+use scuba_ext::MononokeScubaSampleBuilder;
+use tokio::sync::mpsc::Sender;
 
 use crate::bookmarks_provider::bookmarks;
 use crate::bookmarks_provider::list_tags;
 use crate::mapping::bonsai_git_mappings_by_bonsai;
 use crate::mapping::git_shas_to_bonsais;
 use crate::mapping::include_symrefs;
+use crate::mapping::ordered_bonsai_git_mappings_by_bonsai;
 use crate::mapping::refs_to_include;
 use crate::store::base_packfile_item;
 use crate::store::changeset_delta_manifest_entries;
@@ -61,6 +65,8 @@ use crate::types::RefsSource;
 use crate::types::ShallowInfoRequest;
 use crate::types::ShallowInfoResponse;
 use crate::types::ShallowVariant;
+use crate::utils::ancestors_after_time;
+use crate::utils::ancestors_excluding;
 use crate::utils::commits;
 use crate::utils::delta_base;
 use crate::utils::entry_weight;
@@ -77,7 +83,6 @@ async fn boundary_trees_and_blobs(
 ) -> Result<FxHashSet<FullObjectEntry>> {
     let FetchContainer {
         ctx,
-        derived_data,
         blobstore,
         filter,
         concurrency,
@@ -88,47 +93,37 @@ async fn boundary_trees_and_blobs(
         Some(shallow_info) => shallow_info.boundary_commits.clone(),
         None => Vec::new(),
     };
-    stream::iter(boundary_commits.into_iter().map(Ok))
-        .map_ok(|changeset_id| {
-            cloned!(ctx, derived_data, blobstore, filter);
+    stream::iter(boundary_commits.into_iter().map(|entry| Ok((entry.csid(), entry.oid()))))
+        .map_ok(|(changeset_id, git_commit_id)| {
+            cloned!(ctx, blobstore, filter);
             async move {
-                let root_tree = derived_data
-                    .derive::<TreeHandle>(&ctx, changeset_id)
+                let commit_object = fetch_non_blob_git_object(&ctx, &blobstore, &git_commit_id)
                     .await
-                    .with_context(|| {
-                        format!(
-                            "Error in deriving TreeHandle for changeset {:?}",
-                            changeset_id
-                        )
-                    })?;
-                let objects = root_tree
-                    .list_all_entries((*ctx).clone(), blobstore)
-                    .try_filter_map(|(path, entry)| {
-                        let filter = filter.clone();
-                        let tree_member = TreeMember::from(entry);
-                        let kind = if tree_member.oid().is_blob() {
-                            DeltaObjectKind::Blob
+                    .context("Error in fetching boundary commit")?
+                    .try_into_commit()
+                    .map_err(|_| anyhow::anyhow!("Git object {:?} is not a commit", git_commit_id))?;
+                let root_tree = GitTreeId(commit_object.tree);
+                let objects = root_tree.list_all_entries((*ctx).clone(), blobstore.clone()).try_filter_map(|(path, entry)|{
+                    cloned!(ctx, blobstore, filter);
+                    async move {
+                        let size = entry.size(&ctx, &blobstore).await?;
+                        let kind = entry.kind();
+                        let oid = entry.oid();
+                        // If the entry corresponds to a submodules (and shows up as a commit), then we ignore it
+                        // If the object is ignored by the filter, then we ignore it
+                        if !filter_object(filter, &path, kind, size) || entry.is_submodule() {
+                            Ok(None)
                         } else {
-                            DeltaObjectKind::Tree
-                        };
-                        async move {
-                            // If the entry corresponds to a submodules (and shows up as a commit), then we ignore it
-                            let is_submodule = tree_member.filemode() == mode::GIT_FILEMODE_COMMIT;
-                            // If the object is ignored by the filter, then we ignore it
-                            if !filter_object(filter, &path, kind, tree_member.oid().size()) || is_submodule {
-                                Ok(None)
-                            } else {
-                                Ok(Some(FullObjectEntry::new(changeset_id, path, *tree_member.oid())?))
-                            }
+                            Ok(Some(FullObjectEntry::new(changeset_id, path, oid, size, kind)))
                         }
-                    })
-                    .try_collect::<FxHashSet<_>>()
-                    .await
-                    .with_context(|| {
-                        format!(
-                            "Error while listing all entries from TreeHandle for changeset {changeset_id:?}",
-                        )
-                    })?;
+                    }
+                }).try_collect::<FxHashSet<_>>()
+                .await
+                .with_context(|| {
+                    format!(
+                        "Error while listing all entries from GitTree for changeset {changeset_id:?}",
+                    )
+                })?;
                 Ok(objects)
             }
         })
@@ -455,7 +450,11 @@ async fn commit_packfile_stream<'a>(
         ..
     } = fetch_container;
     let shallow_commits = match shallow_info.as_ref() {
-        Some(shallow_info) => shallow_info.boundary_commits.clone(),
+        Some(shallow_info) => shallow_info
+            .boundary_commits
+            .iter()
+            .map(|entry| entry.csid())
+            .collect(),
         None => Vec::new(),
     };
     commit_count += shallow_commits.len();
@@ -775,6 +774,8 @@ pub async fn fetch_response<'a>(
     ctx: CoreContext,
     repo: &'a impl Repo,
     mut request: FetchRequest,
+    progress_writer: Sender<String>,
+    perf_scuba: MononokeScubaSampleBuilder,
 ) -> Result<FetchResponse<'a>> {
     let delta_inclusion = DeltaInclusion::standard();
     let filter = Arc::new(request.filter.clone());
@@ -792,15 +793,36 @@ pub async fn fetch_response<'a>(
     )?;
     // Convert the base commits and head commits, which are represented as Git hashes, into Bonsai hashes
     // If the input contains tag object Ids, fetch the corresponding tag names
+    progress_writer
+        .send("Converting HAVE Git commits to Bonsais\n".to_string())
+        .await?;
     let translated_sha_bases = git_shas_to_bonsais(&ctx, repo, request.bases.iter())
+        .try_timed()
         .await
-        .context("Error converting base Git commits to Bonsai duing fetch")?;
+        .context("Error converting base Git commits to Bonsai duing fetch")?
+        .log_future_stats(
+            perf_scuba.clone(),
+            "Converted HAVE Git commits to Bonsais",
+            "Read".to_string(),
+        );
+    progress_writer
+        .send("Converting WANT Git commits to Bonsais\n".to_string())
+        .await?;
     let translated_sha_heads = git_shas_to_bonsais(&ctx, repo, request.heads.iter())
+        .try_timed()
         .await
-        .context("Error converting head Git commits to Bonsai during fetch")?;
+        .context("Error converting head Git commits to Bonsai during fetch")?
+        .log_future_stats(
+            perf_scuba.clone(),
+            "Converted WANT Git commits to Bonsais",
+            "Read".to_string(),
+        );
     // Get the stream of commits between the bases and heads
     // NOTE: Another Git magic. The filter spec includes an option that the client can use to exclude commit-type objects. But, even if the client
     // uses that filter, we just ignore it and send all the commits anyway :)
+    progress_writer
+        .send("Collecting Bonsai commits to send to client\n".to_string())
+        .await?;
     let mut target_commits = commits(
         &ctx,
         repo,
@@ -808,42 +830,84 @@ pub async fn fetch_response<'a>(
         translated_sha_bases.bonsais.clone(),
         &shallow_info,
     )
-    .await?;
+    .try_timed()
+    .await?
+    .log_future_stats(
+        perf_scuba.clone(),
+        "Collected Bonsai commits to send to client",
+        "Read".to_string(),
+    );
     // Reverse the list of commits so that we can prevent delta cycles from appearing in the packfile
     target_commits.reverse();
+    progress_writer
+        .send("Couting number of objects to be sent in packfile\n".to_string())
+        .await?;
     // Get the count of unique blob and tree objects to be included in the packfile
     let (trees_and_blobs_count, base_set) = trees_and_blobs_count(
         fetch_container.clone(),
         to_commit_stream(target_commits.clone()),
         translated_sha_heads.non_tag_non_commit_oids.clone(),
     )
+    .try_timed()
     .await
-    .context("Error while calculating object count during fetch")?;
+    .context("Error while calculating object count during fetch")?
+    .log_future_stats(
+        perf_scuba.clone(),
+        "Counted number of objects to be sent in packfile",
+        "Read".to_string(),
+    );
     // Get the stream of blob and tree packfile items (with deltas where possible) to include in the pack/bundle. Note that
     // we have already counted these items as part of object count.
+    progress_writer
+        .send("Generating trees and blobs stream\n".to_string())
+        .await?;
     let tree_and_blob_stream = tree_and_blob_packfile_stream(
         fetch_container.clone(),
         target_commits.clone(),
         Arc::new(base_set),
         translated_sha_heads.non_tag_non_commit_oids,
     )
+    .try_timed()
     .await
-    .context("Error while generating blob and tree packfile item stream during fetch")?;
+    .context("Error while generating blob and tree packfile item stream during fetch")?
+    .log_future_stats(
+        perf_scuba.clone(),
+        "Generated trees and blobs stream",
+        "Read".to_string(),
+    );
     // Get the stream of commit packfile items to include in the pack/bundle. Note that we have already counted these items
     // as part of object count.
+    progress_writer
+        .send("Generating commits stream\n".to_string())
+        .await?;
     let (commit_stream, commits_count) =
         commit_packfile_stream(fetch_container.clone(), repo, target_commits.clone())
+            .try_timed()
             .await
-            .context("Error while generating commit packfile item stream during fetch")?;
+            .context("Error while generating commit packfile item stream during fetch")?
+            .log_future_stats(
+                perf_scuba.clone(),
+                "Generated commits stream",
+                "Read".to_string(),
+            );
     // Get the stream of all annotated tag items in the repo
+    progress_writer
+        .send("Generating tags stream\n".to_string())
+        .await?;
     let (tag_stream, tags_count) = tags_packfile_stream(
         fetch_container,
         repo,
         target_commits,
         translated_sha_heads.tag_names.clone(),
     )
+    .try_timed()
     .await
-    .context("Error while generating tag packfile item stream during fetch")?;
+    .context("Error while generating tag packfile item stream during fetch")?
+    .log_future_stats(
+        perf_scuba.clone(),
+        "Generated tags stream",
+        "Read".to_string(),
+    );
     // Compute the overall object count by summing the trees, blobs, tags and commits count
     let object_count = commits_count + trees_and_blobs_count + tags_count;
     // Combine all streams together and return the response. The ordering of the streams in this case is irrelevant since the commit
@@ -852,6 +916,9 @@ pub async fn fetch_response<'a>(
         .chain(commit_stream)
         .chain(tree_and_blob_stream)
         .boxed();
+    progress_writer
+        .send("Sending packfile stream\n".to_string())
+        .await?;
     Ok(FetchResponse::new(packfile_stream, object_count))
 }
 
@@ -870,7 +937,13 @@ pub async fn shallow_info(
     let translated_shallow_commits = git_shas_to_bonsais(&ctx, repo, request.shallow.iter())
         .await
         .context("Error converting shallow Git commits to Bonsai during shallow-info")?;
-    let shallow_bonsais = translated_shallow_commits.bonsais.clone();
+    let shallow_commits = ordered_bonsai_git_mappings_by_bonsai(
+        &ctx,
+        repo,
+        translated_shallow_commits.bonsais.clone(),
+    )
+    .await
+    .context("Error fetching Git mappings for shallow bonsais")?;
     let ancestors_within_distance = match &request.variant {
         ShallowVariant::FromServerWithDepth(depth) => repo
             .commit_graph()
@@ -879,15 +952,28 @@ pub async fn shallow_info(
             .context("Error in getting ancestors within distance from heads commits during shallow-info")?,
         ShallowVariant::FromClientWithDepth(depth) => repo
             .commit_graph()
-            .ancestors_within_distance(&ctx, translated_shallow_commits.bonsais, (*depth - 1) as u64)
+            .ancestors_within_distance(&ctx, translated_shallow_commits.bonsais, *depth as u64)
             .await
             .context("Error in getting ancestors within distance from shallow commits during shallow-info")?,
+        ShallowVariant::FromServerWithTime(time) => ancestors_after_time(&ctx, repo, translated_sha_heads.bonsais, *time)
+            .await
+            .context("Error in getting ancestors after time during shallow-info")?,
+        ShallowVariant::FromServerExcludingRefs(excluded_refs) => ancestors_excluding(&ctx, repo, translated_sha_heads.bonsais, excluded_refs.clone())
+            .await
+            .context("Error in getting ancestors excluding refs during shallow-info")?,
         ShallowVariant::None => AncestorsWithinDistance::default(),
-        variant => anyhow::bail!("Shallow variant {:?} is not supported yet", variant),
     };
+    let boundary_commits =
+        ordered_bonsai_git_mappings_by_bonsai(&ctx, repo, ancestors_within_distance.boundaries)
+            .await
+            .context("Error fetching Git mappings for boundary bonsais")?;
+    let target_commits =
+        ordered_bonsai_git_mappings_by_bonsai(&ctx, repo, ancestors_within_distance.ancestors)
+            .await
+            .context("Error fetching Git mappings for target bonsais")?;
     Ok(ShallowInfoResponse::new(
-        ancestors_within_distance.ancestors,
-        ancestors_within_distance.boundaries,
-        shallow_bonsais,
+        target_commits,
+        boundary_commits,
+        shallow_commits,
     ))
 }

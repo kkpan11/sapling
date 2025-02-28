@@ -15,6 +15,7 @@ use connection_security_checker::ConnectionSecurityChecker;
 use futures::future::TryFutureExt;
 use gotham::handler::Handler;
 use hyper::server::conn::Http;
+use mononoke_macros::mononoke;
 use openssl::ssl::Ssl;
 use openssl::ssl::SslAcceptor;
 use quiet_stream::QuietShutdownStream;
@@ -31,7 +32,7 @@ use crate::socket_data::TlsSocketData;
 struct Empty {}
 
 pub async fn https<H>(
-    logger: Logger,
+    logger: impl Into<Logger>,
     listener: TcpListener,
     acceptor: SslAcceptor,
     capture_session_data: bool,
@@ -41,6 +42,7 @@ pub async fn https<H>(
 where
     H: Handler + Clone + Send + Sync + 'static + RefUnwindSafe,
 {
+    let logger = logger.into();
     let connection_security_checker = Arc::new(connection_security_checker);
     let acceptor = Arc::new(acceptor);
 
@@ -84,20 +86,22 @@ where
             Result::<_, Error>::Ok(())
         };
 
-        tokio::spawn(task.map_err(move |e| {
+        mononoke::spawn_task(task.map_err(move |e| {
             warn!(&logger, "HTTPS Server error: {:?}", e);
         }));
     }
 }
 
 pub async fn http<H>(
-    logger: Logger,
+    logger: impl Into<Logger>,
     listener: TcpListener,
     handler: MononokeHttpHandler<H>,
 ) -> Result<(), Error>
 where
     H: Handler + Clone + Send + Sync + 'static + RefUnwindSafe,
 {
+    let logger = logger.into();
+
     loop {
         let (socket, peer_addr) = listener
             .accept()
@@ -120,7 +124,7 @@ where
             Result::<_, Error>::Ok(())
         };
 
-        tokio::spawn(task.map_err(move |e| {
+        mononoke::spawn_task(task.map_err(move |e| {
             warn!(&logger, "HTTP Server error: {:?}", e);
         }));
     }

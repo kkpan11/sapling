@@ -142,7 +142,6 @@ from sapling import (
     patch,
     pathutil,
     progress,
-    pycompat,
     registrar,
     scmutil,
     ui as uimod,
@@ -151,7 +150,6 @@ from sapling import (
 from sapling.i18n import _
 from sapling.node import nullid, nullrev
 from sapling.thirdparty import attr
-
 
 cmdtable = {}
 command = registrar.command(cmdtable)
@@ -514,7 +512,7 @@ def _tracksparseprofiles(lui: "uimod.ui", repo: "localrepo.localrepository") -> 
     # them. Only read the sparse file on the filesystem.
     if hasattr(repo, "getactiveprofiles"):
         profile = repo.localvfs.tryread("sparse")
-        lui.log("sparse_profiles", "", active_profiles=pycompat.decodeutf8(profile))
+        lui.log("sparse_profiles", "", active_profiles=profile.decode())
 
 
 def _trackdirstatesizes(lui: "uimod.ui", repo: "localrepo.localrepository") -> None:
@@ -1636,7 +1634,7 @@ def readsparseprofile(
 
 
 def getrawprofile(repo, profile, changeid):
-    return pycompat.decodeutf8(repo.filectx(profile, changeid=changeid).data())
+    return repo.filectx(profile, changeid=changeid).data().decode()
 
 
 def _getcachedprofileconfigs(repo):
@@ -1669,7 +1667,7 @@ PROFILE_INACTIVE, PROFILE_ACTIVE, PROFILE_INCLUDED = _profile_flags = range(3)
 
 
 @attr.s(slots=True, frozen=True)
-class ProfileInfo(pycompat.Mapping):
+class ProfileInfo(collections.abc.Mapping):
     path = attr.ib()
     active = attr.ib()
     _metadata = attr.ib(default=attr.Factory(dict))
@@ -2537,7 +2535,8 @@ def _explainprofile(ui, repo, *profiles, **opts) -> int:
 
     def sortedsets(d):
         return {
-            k: sorted(v) if isinstance(v, pycompat.Set) else v for k, v in d.items()
+            k: sorted(v) if isinstance(v, collections.abc.Set) else v
+            for k, v in d.items()
         }
 
     ui.pager("sparse explain")
@@ -3025,7 +3024,7 @@ def _import(ui, repo, files, opts, force: bool = False) -> None:
         for file in files:
             with util.posixfile(util.expandpath(file), "rb") as importfile:
                 irawconfig = readsparseconfig(
-                    repo, pycompat.decodeutf8(importfile.read()), filename=file
+                    repo, importfile.read().decode(), filename=file
                 )
                 iincludes, iexcludes = irawconfig.toincludeexclude()
                 iprofiles = irawconfig.profiles
@@ -3124,10 +3123,10 @@ def _cwdlist(repo) -> None:
     # Get the root of the repo so that we remove the content of
     # the root from the current working directory
     root = repo.root
-    cwd = util.normpath(pycompat.getcwd())
+    cwd = util.normpath(os.getcwd())
     cwd = os.path.relpath(cwd, root)
-    cwd = "" if cwd == os.curdir else cwd + pycompat.ossep
-    if cwd.startswith(os.pardir + pycompat.ossep):
+    cwd = "" if cwd == os.curdir else cwd + os.sep
+    if cwd.startswith(os.pardir + os.sep):
         raise error.Abort(
             _("the current working directory should begin with the root %s") % root
         )
@@ -3141,7 +3140,7 @@ def _cwdlist(repo) -> None:
     cwdlength = len(cwd)
 
     for filepath in files:
-        entryname = filepath[cwdlength:].partition(pycompat.ossep)[0]
+        entryname = filepath[cwdlength:].partition(os.sep)[0]
 
         allentries.add(entryname)
         if sparsematch(filepath):

@@ -61,8 +61,13 @@
 #include "eden/fs/model/TreeEntry.h"
 #include "eden/fs/model/git/TopLevelIgnores.h"
 #include "eden/fs/nfs/Nfsd3.h"
+#ifdef _WIN32
+#include "eden/fs/notifications/Notifier.h"
+#endif
 #include "eden/fs/privhelper/PrivHelper.h"
 #include "eden/fs/prjfs/PrjfsChannel.h"
+#include "eden/fs/rust/redirect_ffi/include/ffi.h"
+#include "eden/fs/rust/redirect_ffi/src/lib.rs.h"
 #include "eden/fs/service/EdenServer.h"
 #include "eden/fs/service/ThriftGetObjectImpl.h"
 #include "eden/fs/service/ThriftGlobImpl.h"
@@ -831,9 +836,27 @@ folly::SemiFuture<folly::Unit> EdenServiceHandler::semifuture_unmount(
   auto helper = INSTRUMENT_THRIFT_CALL(INFO, *mountPoint);
   return wrapImmediateFuture(
              std::move(helper),
-             makeImmediateFutureWith([&] {
+             makeImmediateFutureWith([&]() mutable {
                auto mountPath = absolutePathFromThrift(*mountPoint);
-               return server_->unmount(mountPath);
+               return server_->unmount(mountPath, UnmountOptions{});
+             }).thenError([](const folly::exception_wrapper& ex) {
+               throw newEdenError(ex);
+             }))
+      .semi();
+}
+
+folly::SemiFuture<folly::Unit> EdenServiceHandler::semifuture_unmountV2(
+    std::unique_ptr<UnmountArgument> unmountArg) {
+  auto helper =
+      INSTRUMENT_THRIFT_CALL(INFO, *unmountArg->mountId()->mountPoint_ref());
+  return wrapImmediateFuture(
+             std::move(helper),
+             makeImmediateFutureWith([&]() mutable {
+               auto mountPath = absolutePathFromThrift(
+                   *unmountArg->mountId()->mountPoint_ref());
+               return server_->unmount(
+                   mountPath,
+                   UnmountOptions{.force = *unmountArg->useForce_ref()});
              }).thenError([](const folly::exception_wrapper& ex) {
                throw newEdenError(ex);
              }))
@@ -2326,7 +2349,7 @@ void EdenServiceHandler::sync_changesSinceV2(
           "fromPosition={}:{}:{}, includedRoots:{}, excludedRoots:{}, includedSuffixes:{}, excludedSuffixes:{}",
           fromPosition.mountGeneration().value(),
           fromPosition.sequenceNumber().value(),
-          fromPosition.snapshotHash().value(),
+          logHash(fromPosition.snapshotHash().value()),
           toLogArg(includedRoots),
           toLogArg(excludedRoots),
           toLogArg(includedSuffixes),
@@ -2529,6 +2552,85 @@ void EdenServiceHandler::sync_changesSinceV2(
 
     result.toPosition_ref() = std::move(toPosition);
   }
+}
+
+folly::SemiFuture<std::unique_ptr<StartFileAccessMonitorResult>>
+EdenServiceHandler::semifuture_startFileAccessMonitor(
+    [[maybe_unused]] std::unique_ptr<StartFileAccessMonitorParams> params) {
+#ifdef __APPLE__
+  auto helper = INSTRUMENT_THRIFT_CALL(DBG1, *params->paths_ref());
+
+  constexpr std::string_view FAM_TMP_OUTPUT_DIR = "/tmp/edenfs/fam/";
+
+  // Get the current time
+  std::time_t nowTime =
+      std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+
+  // Create a character string to format the date and time
+  char datetimeString[20];
+  std::strftime(
+      datetimeString,
+      sizeof(datetimeString),
+      "%Y%m%d_%H%M%S",
+      std::localtime(&nowTime));
+
+  // form the path to tmp file
+  std::string tmpPath =
+      fmt::format("{}fam_{}.out", FAM_TMP_OUTPUT_DIR, datetimeString);
+
+  auto fut = ImmediateFuture<pid_t>(
+      server_->getServerState()->getPrivHelper()->startFam(
+          *params->paths(),
+          tmpPath,
+          params->specifiedOutputPath().value_or(tmpPath),
+          *params->shouldUpload_ref()));
+  return wrapImmediateFuture(
+             std::move(helper),
+             std::move(fut).thenValue(
+                 [tmpPath = std::move(tmpPath)](pid_t pid) mutable {
+                   auto out = std::make_unique<StartFileAccessMonitorResult>();
+                   out->pid() = pid;
+                   out->tmpOutputPath() = std::move(tmpPath);
+                   return out;
+                 }))
+      .semi();
+#else // !__APPLE__
+  NOT_IMPLEMENTED();
+#endif
+}
+
+folly::SemiFuture<std::unique_ptr<StopFileAccessMonitorResult>>
+EdenServiceHandler::semifuture_stopFileAccessMonitor() {
+#ifdef __APPLE__
+  auto helper = INSTRUMENT_THRIFT_CALL(DBG1);
+
+  auto fut = ImmediateFuture<StopFileAccessMonitorResponse>(
+      server_->getServerState()->getPrivHelper()->stopFam());
+
+  return wrapImmediateFuture(
+             std::move(helper), std::move(fut).thenValue([&](auto&& response) {
+               auto out = std::make_unique<StopFileAccessMonitorResult>();
+               out->tmpOutputPath() = response.tmpOutputPath;
+               out->specifiedOutputPath() = response.specifiedOutputPath;
+               out->shouldUpload() = response.shouldUpload;
+               return out;
+             }))
+      .semi();
+#else // !__APPLE__
+  NOT_IMPLEMENTED();
+#endif
+}
+
+void EdenServiceHandler::sendNotification(
+    [[maybe_unused]] SendNotificationResponse&,
+    [[maybe_unused]] std::unique_ptr<SendNotificationRequest> request) {
+#ifdef _WIN32
+  server_->getServerState()->getNotifier()->showHealthReportNotification(
+      request->title().value(), request->description().value());
+#else
+  (void)request;
+  NOT_IMPLEMENTED();
+#endif
 }
 
 apache::thrift::ResponseAndServerStream<ChangesSinceResult, ChangedFileResult>
@@ -5400,6 +5502,30 @@ EdenServiceHandler::semifuture_debugInvalidateNonMaterialized(
         std::move(invalFut).semi());
     return std::make_unique<DebugInvalidateResponse>();
   }
+}
+
+void EdenServiceHandler::listRedirections(
+    ListRedirectionsResponse& response,
+    std::unique_ptr<ListRedirectionsRequest> request) {
+  auto mountId = request->mount();
+  auto helper = INSTRUMENT_THRIFT_CALL(DBG3, *mountId);
+
+  const auto& configDir = server_->getEdenDir();
+  const auto& edenEtcDir =
+      server_->getServerState()->getEdenConfig()->getSystemConfigDir();
+
+  auto redirsFFI = list_redirections(
+      absolutePathFromThrift(*mountId->mountPoint_ref()).stringWithoutUNC(),
+      configDir.stringWithoutUNC(),
+      edenEtcDir.stringWithoutUNC());
+
+  std::vector<Redirection> redirs(redirsFFI.size());
+  std::transform(
+      redirsFFI.begin(), redirsFFI.end(), redirs.begin(), [](auto&& redirFFI) {
+        return redirectionFromFFI(std::move(redirFFI));
+      });
+
+  response.redirections_ref() = std::move(redirs);
 }
 
 void EdenServiceHandler::getStatInfo(

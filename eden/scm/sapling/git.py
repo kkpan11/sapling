@@ -371,6 +371,9 @@ def openstore(repo):
     gitdir = readgitdir(repo)
     if gitdir:
         if DOTGIT_REQUIREMENT not in repo.storerequirements:
+            # The libgit2 we use has issues with the multi-pack-index.
+            # Disable it for now, until we upgrade or replace libgit2.
+            util.tryunlink(gitdir + "/objects/pack/multi-pack-index")
             write_maintained_git_config(repo)
         return bindings.gitstore.gitstore(gitdir, repo.ui._rcfg)
 
@@ -402,13 +405,16 @@ def readconfig(repo):
 #
 # `repack.writeBitmaps` is incompatible with `repack --filter...` and
 # might cause issues. Therefore disable it.
+#
+# The multi-pack-index (incremental-repack) is incompatible with the libgit2
+# we're using, unfortunately...
 MAINTAINED_GIT_CONFIG = """
 [maintenance "gc"]
   enabled = false
 [maintenance "loose-objects"]
   enabled = true
 [maintenance "incremental-repack"]
-  enabled = true
+  enabled = false
 [repack]
   writeBitmaps = false
 """
@@ -803,9 +809,13 @@ def parsesubmodules(ctx):
 
     data = ctx[".gitmodules"].data()
     submodules = []
-    for name, url, path in bindings.workingcopy.parsegitsubmodules(data):
+    try:
+        origin_url = repo.ui.paths["default"].loc or None
+    except KeyError:
+        origin_url = None
+    for s in bindings.submodule.parse_gitmodules(data, origin_url):
         submodules.append(
-            Submodule(name, url, path, weakref.proxy(repo)),
+            Submodule(s["name"], s["url"], s["path"], weakref.proxy(repo)),
         )
 
     return submodules
@@ -830,8 +840,8 @@ def maybe_cleanup_submodule_in_treestate(repo):
         return
 
     remove = repo.dirstate._map._tree.remove
-    for _name, _url, path in bindings.workingcopy.parsegitsubmodules(data):
-        remove(path)
+    for s in bindings.submodule.parse_gitmodules(data):
+        remove(s["path"])
 
 
 def submodulecheckout(ctx, match=None, force=False, mctx=None):

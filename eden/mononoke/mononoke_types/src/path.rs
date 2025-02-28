@@ -22,6 +22,7 @@ use anyhow::Context as _;
 use anyhow::Error;
 use anyhow::Result;
 use ascii::AsciiString;
+use itertools::Itertools;
 use quickcheck::Arbitrary;
 use quickcheck::Gen;
 use quickcheck_arbitrary_derive::Arbitrary;
@@ -343,6 +344,18 @@ impl MPath {
     pub fn to_vec(&self) -> Vec<u8> {
         let ret: Vec<_> = self.elements.iter().map(|e| e.0.as_ref()).collect();
         ret.join(&b'/')
+    }
+
+    pub fn iter_bytes(&self) -> impl Iterator<Item = u8> + '_ {
+        Itertools::intersperse(self.elements.iter().map(|e| e.as_ref()), b"/".as_ref())
+            .flatten()
+            .copied()
+    }
+
+    pub fn compare_bytes(&self, other: &MPath) -> std::cmp::Ordering {
+        let self_bytes = self.iter_bytes();
+        let other_bytes = other.iter_bytes();
+        self_bytes.cmp(other_bytes)
     }
 
     #[allow(clippy::len_without_is_empty)]
@@ -745,6 +758,12 @@ impl NonRootMPath {
         self.0.common_components(other)
     }
 
+    /// Whether this path is related to the given path. A path P1 is related to path P2 iff
+    /// P1 is prefix of P2 or vice versa.
+    pub fn is_related_to(&self, other: &NonRootMPath) -> bool {
+        self.0.is_related_to(&other.0)
+    }
+
     /// Whether this path is a path prefix of the given path.
     /// `foo` is a prefix of `foo/bar`, but not of `foo1`.
     #[inline]
@@ -786,6 +805,14 @@ impl NonRootMPath {
 
     pub fn to_vec(&self) -> Vec<u8> {
         self.0.to_vec()
+    }
+
+    pub fn iter_bytes(&self) -> impl Iterator<Item = u8> + '_ {
+        self.0.iter_bytes()
+    }
+
+    pub fn compare_bytes(&self, other: &NonRootMPath) -> std::cmp::Ordering {
+        self.0.compare_bytes(&other.0)
     }
 
     /// The length of this path, including any slashes in it.
@@ -1525,6 +1552,10 @@ mod test {
             let p2 = MPathElement::from_thrift(thrift_pathelement)
                 .expect("converting a valid Thrift structure should always works");
             p == p2
+        }
+
+        fn compare_bytes(p1: MPath, p2: MPath) -> bool {
+            p1.to_vec().cmp(&p2.to_vec()) == p1.compare_bytes(&p2)
         }
     }
 

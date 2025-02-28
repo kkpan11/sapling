@@ -58,6 +58,8 @@ use slog::o;
 use slog::warn;
 use slog::Logger;
 
+mod stats;
+
 const SM_CLEANUP_TIMEOUT_SECS: u64 = 120;
 
 // We will select the first protocol supported by the server which is also supported by the client.
@@ -108,10 +110,9 @@ pub struct MononokeServerProcess {
 impl MononokeServerProcess {
     fn new(
         fb: FacebookInit,
-        repos_mgr: MononokeReposManager<Repo>,
+        repos_mgr: Arc<MononokeReposManager<Repo>>,
         scuba: MononokeScubaSampleBuilder,
     ) -> Self {
-        let repos_mgr = Arc::new(repos_mgr);
         Self {
             fb,
             repos_mgr,
@@ -125,6 +126,7 @@ impl MononokeServerProcess {
         logger: &Logger,
         scuba: &MononokeScubaSampleBuilder,
     ) -> Result<()> {
+        assert!(repo_name.is_empty());
         // Check if the input repo is already initialized. This can happen if the repo is a
         // shallow-sharded repo, in which case it would already be initialized during service startup.
         if self.repos_mgr.repos().get_by_name(repo_name).is_none() {
@@ -158,10 +160,10 @@ impl MononokeServerProcess {
 #[async_trait]
 impl RepoShardedProcess for MononokeServerProcess {
     async fn setup(&self, repo: &RepoShard) -> anyhow::Result<Arc<dyn RepoShardedProcessExecutor>> {
-        let repo_name = repo.repo_name.as_str();
-        let logger = self.repos_mgr.repo_logger(repo_name);
+        let repo_name = repo.repo_name.clone();
+        let logger = self.repos_mgr.repo_logger(&repo_name);
         info!(&logger, "Setting up repo {} in Mononoke service", repo_name);
-        self.add_repo(repo_name, &logger, &self.scuba)
+        self.add_repo(&repo_name, &logger, &self.scuba.clone())
             .await
             .with_context(|| {
                 format!(
@@ -169,8 +171,31 @@ impl RepoShardedProcess for MononokeServerProcess {
                     repo_name
                 )
             })?;
+
+        let config = self.repos_mgr.repo_config(&repo_name)?;
+        if config.log_repo_stats {
+            let repos = self.repos_mgr.repos().get_by_name(&repo_name);
+            match repos {
+                Some(repo) => {
+                    let ctx = CoreContext::new_with_logger(self.fb, logger);
+                    stats::init_stats_loop(
+                        &ctx,
+                        self.repos_mgr.clone(),
+                        repo_name.clone(),
+                        repo.clone(),
+                    )
+                    .await;
+                }
+                None => slog::warn!(
+                    logger,
+                    "Requested to log stats of unopened repo {}",
+                    repo_name
+                ),
+            }
+        }
+
         Ok(Arc::new(MononokeServerProcessExecutor {
-            repo_name: repo_name.to_string(),
+            repo_name,
             repos_mgr: self.repos_mgr.clone(),
         }))
     }
@@ -191,6 +216,7 @@ impl MononokeServerProcessExecutor {
                 repo_name
             )
         })?;
+        self.repos_mgr.remove_stats_handle_for_repo(repo_name);
         // Check if the current repo is a deep-sharded or shallow-sharded repo. If the
         // repo is deep-sharded, then remove it since SM wants some other host to serve it.
         // If repo is shallow-sharded, then keep it since regardless of SM sharding, shallow
@@ -199,6 +225,7 @@ impl MononokeServerProcessExecutor {
             .deep_sharding_config
             .and_then(|c| c.status.get(&ShardedService::SaplingRemoteApi).copied())
             .unwrap_or(false);
+
         if is_deep_sharded {
             self.repos_mgr.remove_repo(repo_name);
             info!(
@@ -223,6 +250,7 @@ impl RepoShardedProcessExecutor for MononokeServerProcessExecutor {
             self.repos_mgr.logger(),
             "Serving repo {} in Mononoke service", &self.repo_name,
         );
+
         Ok(())
     }
 
@@ -351,11 +379,18 @@ fn main(fb: FacebookInit) -> Result<()> {
                 .try_collect::<()>()
                 .await?;
             info!(&root_log, "Cache warmup completed");
+            let repos_mgr = Arc::new(repos_mgr);
             if let Some(mut executor) = args.sharded_executor_args.build_executor(
                 app.fb,
                 runtime.clone(),
                 app.logger(),
-                || Arc::new(MononokeServerProcess::new(app.fb, repos_mgr, scuba.clone())),
+                || {
+                    Arc::new(MononokeServerProcess::new(
+                        app.fb,
+                        repos_mgr.clone(),
+                        scuba.clone(),
+                    ))
+                },
                 false, // disable shard (repo) level healing
                 SM_CLEANUP_TIMEOUT_SECS,
             )? {
@@ -368,6 +403,22 @@ fn main(fb: FacebookInit) -> Result<()> {
                         async move { executor.block_and_execute(&logger, will_exit).await }
                     }
                 });
+            } else {
+                let logger = app.logger().clone();
+                let ctx = CoreContext::new_with_logger(fb, logger);
+                for repo in repos_mgr.clone().repos().iter() {
+                    if repo.repo_config().log_repo_stats {
+                        let repo_name = repo.repo_identity().name().to_string();
+                        info!(ctx.logger(), "Enabling stats loop for {}", repo_name);
+                        stats::init_stats_loop(
+                            &ctx,
+                            repos_mgr.clone(),
+                            repo_name.clone(),
+                            repo.clone(),
+                        )
+                        .await;
+                    }
+                }
             }
             repo_listener::create_repo_listeners(
                 fb,
