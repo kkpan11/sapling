@@ -10,20 +10,20 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use anyhow::anyhow;
 use anyhow::Context;
+use anyhow::anyhow;
 use async_runtime::block_unless_interrupted as block_on;
+use clidispatch::ReqCtx;
+use clidispatch::TermLogger;
 use clidispatch::abort;
 use clidispatch::abort_if;
 use clidispatch::errors;
 use clidispatch::errors::triage_error;
 use clidispatch::fallback;
-use clidispatch::ReqCtx;
-use clidispatch::TermLogger;
 use cmdpy::HgPython;
-use cmdutil::define_flags;
 use cmdutil::ConfigSet;
 use cmdutil::Result;
+use cmdutil::define_flags;
 use configloader::hg::PinnedConfig;
 use configloader::hg::RepoInfo;
 use configmodel::Config;
@@ -31,9 +31,10 @@ use configmodel::ConfigExt;
 use configmodel::ValueSource;
 use eagerepo::EagerRepo;
 use migration::feature::deprecate;
+use regex::Regex;
 use repo::repo::Repo;
-use repourl::encode_repo_name;
 use repourl::RepoUrl;
+use repourl::encode_repo_name;
 use tracing::instrument;
 use types::HgId;
 use url::Url;
@@ -146,6 +147,16 @@ fn run_eden(
     mut config: ConfigSet,
 ) -> Result<()> {
     let logger = ctx.logger();
+
+    if let Some(preferred_regex) = ctx
+        .config()
+        .get_nonempty_opt::<Regex>("clone", "eden-preferred-destination-regex")?
+    {
+        let dest_str = destination.to_string_lossy();
+        if !preferred_regex.is_match(&dest_str) {
+            logger.warn(format!("WARNING: Clone destination {dest_str} is not a preferred location and may result in a bad experience. Preferred locations match the regex '{}'.", preferred_regex.as_str()));
+        }
+    }
 
     // We don't return an error immediately because we need to log the clone
     // type before that, yet we might need to log something different if we

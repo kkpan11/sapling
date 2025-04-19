@@ -9,34 +9,34 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::time::Duration;
 
-use anyhow::ensure;
 use anyhow::Context;
 use anyhow::Result;
+use anyhow::ensure;
 use async_trait::async_trait;
 use clientinfo::ClientEntryPoint;
 use clientinfo::ClientInfo;
 use context::CoreContext;
-use edenapi::api::UploadLookupPolicy;
-use edenapi::paths;
 use edenapi::Client;
 use edenapi::HttpClientBuilder;
 use edenapi::HttpClientConfig;
 use edenapi::SaplingRemoteApi;
-use edenapi_types::bookmark::Freshness;
+use edenapi::api::UploadLookupPolicy;
+use edenapi::paths;
 use edenapi_types::AnyFileContentId;
 use edenapi_types::AnyId;
 use edenapi_types::LookupResponse;
 use edenapi_types::LookupResult;
 use edenapi_types::UploadToken;
 use edenapi_types::UploadTokenData;
-use futures::stream;
+use edenapi_types::bookmark::Freshness;
 use futures::StreamExt;
 use futures::TryStreamExt;
+use futures::stream;
 use http_client::HttpVersion;
-use mercurial_types::blobs::HgBlobChangeset;
 use mercurial_types::HgChangesetId;
 use mercurial_types::HgFileNodeId;
 use mercurial_types::HgManifestId;
+use mercurial_types::blobs::HgBlobChangeset;
 use minibytes::Bytes;
 use mononoke_app::args::TLSArgs;
 use mononoke_types::BonsaiChangeset;
@@ -44,8 +44,8 @@ use mononoke_types::ChangesetId;
 use repo_blobstore::RepoBlobstore;
 use url::Url;
 
-use crate::sender::edenapi::util;
 use crate::sender::edenapi::EdenapiSender;
+use crate::sender::edenapi::util;
 use crate::stat;
 
 pub struct DefaultEdenapiSenderBuilder {
@@ -87,14 +87,21 @@ impl DefaultEdenapiSenderBuilder {
             ..Default::default()
         };
 
-        tracing::info!("Connecting to {}", self.url.to_string());
+        let timeout = justknobs::get_as::<u64>("scm/mononoke:modern_sync_edenapi_timeout", None)
+            .unwrap_or(300);
+
+        tracing::info!(
+            "Connecting to {}, timeout {}s",
+            self.url.to_string(),
+            timeout
+        );
 
         let client = HttpClientBuilder::new()
             .repo_name(&self.reponame)
             .server_url(self.url.clone())
             .http_config(http_config.clone())
             .http_version(HttpVersion::V11)
-            .timeout(Duration::from_secs(300))
+            .timeout(Duration::from_secs(timeout))
             .build()
             .with_context(|| "building http client")?;
 

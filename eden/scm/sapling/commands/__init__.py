@@ -316,9 +316,15 @@ def addremove(ui, repo, *pats, **opts):
 
     Returns 0 if all files are successfully added/removed.
     """
-    opts["similarity"] = opts.get("similarity") or 100
     matcher = scmutil.match(repo[None], pats, opts)
-    return scmutil.addremove(repo, matcher, opts)
+    return scmutil.addremove(
+        repo,
+        matcher,
+        addremove=True,
+        automv=False,
+        similarity=opts.get("similarity") or 100,
+        dry_run=opts.get("dry_run"),
+    )
 
 
 @command(
@@ -1702,6 +1708,7 @@ def commit(ui, repo, *pats, **opts):
 
           @prog@ commit --exclude "set:binary()"
     """
+
     wlock = lock = None
     try:
         wlock = repo.wlock()
@@ -2624,15 +2631,11 @@ def _dograft(ui, repo, *revs, **opts):
     for rev in repo.revs("%ld and merge()", revs):
         ui.warn(_("skipping ungraftable merge revision %d\n") % rev)
         skipped.add(rev)
-    # check subtree copy and merge
+    # check subtree copy, import and merge commit
     for rev in revs:
         if rev in skipped:
             continue
-        ctx = repo[rev]
-        if subtreeutil.get_subtree_metadata(ctx.extra()):
-            ui.warn(
-                _("skipping ungraftable subtree copy and merge revision %s\n") % ctx
-            )
+        if not subtreeutil.is_commit_graftable(repo, rev):
             skipped.add(rev)
     revs = [r for r in revs if r not in skipped]
     if not revs:

@@ -9,18 +9,18 @@ use std::fs::File;
 use std::io::BufRead;
 use std::io::BufReader;
 use std::str::FromStr;
+use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
-use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::format_err;
 use anyhow::Error;
+use anyhow::format_err;
+use backsyncer::BacksyncLimit;
+use backsyncer::Repo;
 use backsyncer::backsync_latest;
 use backsyncer::format_counter;
 use backsyncer::open_backsyncer_dbs;
-use backsyncer::BacksyncLimit;
-use backsyncer::Repo;
 use blobrepo_hg::BlobRepoHg;
 use bookmarks::BookmarkUpdateLogRef;
 use bookmarks::Freshness;
@@ -31,6 +31,7 @@ use cross_repo_sync::CandidateSelectionHint;
 use cross_repo_sync::CommitSyncContext;
 use cross_repo_sync::CommitSyncOutcome;
 use cross_repo_sync::CommitSyncer;
+use cross_repo_sync::sync_commit;
 use futures::future;
 use futures::future::FutureExt;
 use futures::stream;
@@ -179,15 +180,16 @@ pub(crate) async fn run_backsyncer(
                                     // Backsyncer is always used in the large-to-small direction,
                                     // therefore there can be at most one remapped candidate,
                                     // so `CandidateSelectionHint::Only` is a safe choice
-                                    commit_syncer
-                                        .sync_commit(
-                                            ctx.as_ref(),
-                                            bonsai.clone(),
-                                            CandidateSelectionHint::Only,
-                                            CommitSyncContext::Backsyncer,
-                                            false,
-                                        )
-                                        .await?;
+
+                                    sync_commit(
+                                        ctx.as_ref(),
+                                        bonsai.clone(),
+                                        commit_syncer,
+                                        CandidateSelectionHint::Only,
+                                        CommitSyncContext::Backsyncer,
+                                        false,
+                                    )
+                                    .await?;
 
                                     let maybe_sync_outcome =
                                         commit_syncer.get_commit_sync_outcome(&ctx, bonsai).await?;

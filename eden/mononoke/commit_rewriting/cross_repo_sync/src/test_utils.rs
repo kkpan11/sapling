@@ -10,9 +10,9 @@ use std::collections::HashSet;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use anyhow::format_err;
 use anyhow::Context;
 use anyhow::Error;
+use anyhow::format_err;
 use ascii::AsciiString;
 use blobstore::Loadable;
 use bonsai_git_mapping::BonsaiGitMapping;
@@ -24,12 +24,12 @@ use bookmarks::BookmarkUpdateReason;
 use bookmarks::Bookmarks;
 use commit_graph::CommitGraph;
 use commit_graph::CommitGraphWriter;
+use commit_transformation::SubmoduleDeps;
 use commit_transformation::git_submodules::InMemoryRepo;
 use commit_transformation::git_submodules::SubmoduleExpansionData;
 // TODO(T182311609): stop using this directly and call cross_repo_sync methods instead
 use commit_transformation::rewrite_commit;
 use commit_transformation::upload_commits;
-use commit_transformation::SubmoduleDeps;
 use context::CoreContext;
 use filenodes::Filenodes;
 use filestore::FilestoreConfig;
@@ -63,14 +63,15 @@ use synced_commit_mapping::SyncedCommitMapping;
 use synced_commit_mapping::SyncedCommitMappingEntry;
 use test_repo_factory::TestRepoFactory;
 use test_repo_factory::TestRepoFactoryBuilder;
-use tests_utils::bookmark;
 use tests_utils::CreateCommitContext;
+use tests_utils::bookmark;
 
-use crate::commit_syncer::CommitSyncer;
-use crate::commit_syncers_lib::submodule_metadata_file_prefix_and_dangling_pointers;
-use crate::commit_syncers_lib::update_mapping_with_version;
 use crate::commit_syncers_lib::CommitSyncRepos;
 use crate::commit_syncers_lib::Syncers;
+use crate::commit_syncers_lib::submodule_metadata_file_prefix_and_dangling_pointers;
+use crate::commit_syncers_lib::update_mapping_with_version;
+use crate::sync_commit::CommitSyncer;
+use crate::sync_commit::unsafe_always_rewrite_sync_commit;
 use crate::types::Repo;
 
 #[facet::container]
@@ -351,25 +352,25 @@ where
         .commit()
         .await?;
 
-    small_to_large_commit_syncer
-        .unsafe_always_rewrite_sync_commit(
-            ctx,
-            first_bcs_id,
-            None, // parents override
-            &noop_version,
-            CommitSyncContext::Tests,
-        )
-        .await?;
-    let second_large_cs_id = small_to_large_commit_syncer
-        .unsafe_always_rewrite_sync_commit(
-            ctx,
-            second_bcs_id,
-            None, // parents override
-            &noop_version,
-            CommitSyncContext::Tests,
-        )
-        .await?
-        .expect("second commit exists in large repo");
+    unsafe_always_rewrite_sync_commit(
+        ctx,
+        first_bcs_id,
+        &small_to_large_commit_syncer,
+        None, // parents override
+        &noop_version,
+        CommitSyncContext::Tests,
+    )
+    .await?;
+    let second_large_cs_id = unsafe_always_rewrite_sync_commit(
+        ctx,
+        second_bcs_id,
+        &small_to_large_commit_syncer,
+        None, // parents override
+        &noop_version,
+        CommitSyncContext::Tests,
+    )
+    .await?
+    .expect("second commit exists in large repo");
 
     bookmark(ctx, &smallrepo, "premove")
         .set_to(second_bcs_id)

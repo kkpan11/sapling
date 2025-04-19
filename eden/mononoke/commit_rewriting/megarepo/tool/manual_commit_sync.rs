@@ -7,13 +7,14 @@
 
 use std::collections::HashMap;
 
-use anyhow::anyhow;
 use anyhow::Error;
+use anyhow::anyhow;
 use blobstore::Loadable;
 use context::CoreContext;
 use cross_repo_sync::CommitSyncContext;
 use cross_repo_sync::CommitSyncer;
 use cross_repo_sync::Repo as CrossRepo;
+use cross_repo_sync::unsafe_always_rewrite_sync_commit;
 use metaconfig_types::CommitSyncConfigVersion;
 use mononoke_types::ChangesetId;
 
@@ -58,40 +59,40 @@ pub async fn manual_commit_sync<R: CrossRepo>(
             .zip(target_repo_parents.into_iter())
             .collect::<HashMap<_, _>>();
 
-        commit_syncer
-            .unsafe_always_rewrite_sync_commit(
-                ctx,
-                source_cs_id,
-                Some(remapped_parents),
-                &mapping_version,
-                CommitSyncContext::ManualCommitSync,
-            )
-            .await
+        unsafe_always_rewrite_sync_commit(
+            ctx,
+            source_cs_id,
+            &commit_syncer,
+            Some(remapped_parents),
+            &mapping_version,
+            CommitSyncContext::ManualCommitSync,
+        )
+        .await
     } else {
-        commit_syncer
-            .unsafe_always_rewrite_sync_commit(
-                ctx,
-                source_cs_id,
-                None,
-                &mapping_version,
-                CommitSyncContext::ManualCommitSync,
-            )
-            .await
+        unsafe_always_rewrite_sync_commit(
+            ctx,
+            source_cs_id,
+            &commit_syncer,
+            None,
+            &mapping_version,
+            CommitSyncContext::ManualCommitSync,
+        )
+        .await
     }
 }
 
 #[cfg(test)]
 mod test {
+    use cross_repo_sync::test_utils::TestRepo;
     use cross_repo_sync::test_utils::init_small_large_repo;
     use cross_repo_sync::test_utils::xrepo_mapping_version_with_small_repo;
-    use cross_repo_sync::test_utils::TestRepo;
     use fbinit::FacebookInit;
     use maplit::hashmap;
     use mononoke_macros::mononoke;
     use mononoke_types::NonRootMPath;
+    use tests_utils::CreateCommitContext;
     use tests_utils::list_working_copy_utf8;
     use tests_utils::resolve_cs_id;
-    use tests_utils::CreateCommitContext;
 
     use super::*;
 

@@ -31,6 +31,9 @@ class JournalTestBase(testcase.EdenRepoTest):
             configs["notify"] = ['max-num-changes = "100"']
         return configs
 
+    def edenfs_logging_settings(self) -> Dict[str, str]:
+        return {"eden": "DBG3"}
+
     def populate_repo(self) -> None:
         # Create the initial repo. It requires at least 1 file and 1 commit
         self.repo.write_file("hello", "bonjour\n")
@@ -75,6 +78,7 @@ class JournalTestBase(testcase.EdenRepoTest):
         excluded_roots=None,
         included_suffixes=None,
         excluded_suffixes=None,
+        root=None,
     ) -> ChangesSinceV2Result:
         if sys.platform == "win32":
             # On Windows, we need to wait for the file system to settle before
@@ -90,6 +94,7 @@ class JournalTestBase(testcase.EdenRepoTest):
                 excludedRoots=excluded_roots,
                 includedSuffixes=included_suffixes,
                 excludedSuffixes=excluded_suffixes,
+                root=root,
             )
         )
 
@@ -100,6 +105,11 @@ class JournalTestBase(testcase.EdenRepoTest):
         position = self.client.getCurrentJournalPosition(self.mount_path_bytes)
         self.repo_write_file("test_file", "", add=False)
         return self.getChangesSinceV2(position=position)
+
+    def setup_test_add_file_root(self, root) -> ChangesSinceV2Result:
+        position = self.client.getCurrentJournalPosition(self.mount_path_bytes)
+        self.repo_write_file(f"{root}/test_file", "", add=False)
+        return self.getChangesSinceV2(position=position, root=root)
 
     def setup_test_rename_file(self) -> ChangesSinceV2Result:
         self.repo_write_file("test_file", "", add=False)

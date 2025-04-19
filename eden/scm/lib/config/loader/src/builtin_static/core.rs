@@ -5,8 +5,8 @@
  * LICENSE file in the root directory of this source tree.
  */
 
-use staticconfig::static_config;
 use staticconfig::StaticConfig;
+use staticconfig::static_config;
 
 /// Default config. Partially migrated from configitems.py.
 ///
@@ -63,6 +63,8 @@ titles-namespace=true
 local-committemplate=true
 
 evalframe-passthrough=true
+
+run-python-hooks-via-pyhook=true
 
 [zsh]
 completion-age=7

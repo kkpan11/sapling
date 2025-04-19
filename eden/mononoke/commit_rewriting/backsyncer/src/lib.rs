@@ -26,15 +26,15 @@
 use std::collections::HashSet;
 use std::iter::once;
 use std::iter::repeat;
+use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
-use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
+use anyhow::Error;
 use anyhow::bail;
 use anyhow::format_err;
-use anyhow::Error;
 use blobstore::Loadable;
 use bonsai_git_mapping::BonsaiGitMapping;
 use bonsai_globalrev_mapping::BonsaiGlobalrevMapping;
@@ -56,19 +56,20 @@ use commit_graph::CommitGraph;
 use commit_graph::CommitGraphRef;
 use commit_graph::CommitGraphWriter;
 use context::CoreContext;
-use cross_repo_sync::find_toposorted_unsynced_ancestors;
 use cross_repo_sync::CandidateSelectionHint;
 use cross_repo_sync::CommitSyncContext;
 use cross_repo_sync::CommitSyncOutcome;
 use cross_repo_sync::CommitSyncer;
+use cross_repo_sync::find_toposorted_unsynced_ancestors;
+use cross_repo_sync::sync_commit;
 use filenodes::Filenodes;
 use filestore::FilestoreConfig;
-use futures::future;
-use futures::stream;
 use futures::Future;
 use futures::FutureExt;
 use futures::StreamExt;
 use futures::TryStreamExt;
+use futures::future;
+use futures::stream;
 use futures_stats::TimedTryFutureExt;
 use metaconfig_types::RepoConfig;
 use metaconfig_types::RepoConfigRef;
@@ -88,9 +89,9 @@ use repo_cross_repo::RepoCrossRepo;
 use repo_derived_data::RepoDerivedData;
 use repo_identity::RepoIdentity;
 use repo_identity::RepoIdentityRef;
+use repo_update_logger::CommitInfo;
 use repo_update_logger::find_draft_ancestors;
 use repo_update_logger::log_new_commits;
-use repo_update_logger::CommitInfo;
 use scuba_ext::MononokeScubaSampleBuilder;
 use slog::debug;
 use slog::error;
@@ -372,18 +373,18 @@ where
                 cloned!(ctx, sync_context, to_cs_id, commit_syncer);
                 mononoke::spawn_task(async move {
                     commit_only_backsync_future.await;
-                    let res = commit_syncer
-                        .sync_commit(
-                            &ctx,
-                            to_cs_id.clone(),
-                            // Backsyncer is always used in the large-to-small direction,
-                            // therefore there can be at most one remapped candidate,
-                            // so `CandidateSelectionHint::Only` is a safe choice
-                            CandidateSelectionHint::Only,
-                            sync_context,
-                            disable_lease,
-                        )
-                        .await;
+                    let res = sync_commit(
+                        &ctx,
+                        to_cs_id.clone(),
+                        &commit_syncer,
+                        // Backsyncer is always used in the large-to-small direction,
+                        // therefore there can be at most one remapped candidate,
+                        // so `CandidateSelectionHint::Only` is a safe choice
+                        CandidateSelectionHint::Only,
+                        sync_context,
+                        disable_lease,
+                    )
+                    .await;
                     if let Err(err) = res {
                         error!(
                             ctx.logger(),
@@ -437,15 +438,16 @@ where
         // Backsyncer is always used in the large-to-small direction,
         // therefore there can be at most one remapped candidate,
         // so `CandidateSelectionHint::Only` is a safe choice
-        commit_syncer
-            .sync_commit(
-                &ctx,
-                to_cs_id,
-                CandidateSelectionHint::Only,
-                sync_context,
-                disable_lease,
-            )
-            .await?;
+
+        sync_commit(
+            &ctx,
+            to_cs_id,
+            &commit_syncer,
+            CandidateSelectionHint::Only,
+            sync_context,
+            disable_lease,
+        )
+        .await?;
     }
 
     let new_counter = entry.id;

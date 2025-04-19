@@ -9,11 +9,11 @@ use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::str::FromStr;
-use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
-use anyhow::anyhow;
 use anyhow::Error;
+use anyhow::anyhow;
 use ascii::AsciiString;
 use assert_matches::assert_matches;
 use blobrepo_hg::BlobRepoHg;
@@ -33,28 +33,30 @@ use cloned::cloned;
 use commit_graph::CommitGraphRef;
 use commit_transformation::upload_commits;
 use context::CoreContext;
-use cross_repo_sync::get_git_submodule_action_by_version;
-use cross_repo_sync::rewrite_commit;
-use cross_repo_sync::test_utils::TestRepo;
+use cross_repo_sync::CHANGE_XREPO_MAPPING_EXTRA;
 use cross_repo_sync::CandidateSelectionHint;
 use cross_repo_sync::CommitSyncContext;
 use cross_repo_sync::CommitSyncOutcome;
 use cross_repo_sync::CommitSyncRepos;
 use cross_repo_sync::CommitSyncer;
 use cross_repo_sync::SubmoduleDeps;
-use cross_repo_sync::CHANGE_XREPO_MAPPING_EXTRA;
+use cross_repo_sync::get_git_submodule_action_by_version;
+use cross_repo_sync::rewrite_commit;
+use cross_repo_sync::test_utils::TestRepo;
+use cross_repo_sync::unsafe_always_rewrite_sync_commit;
+use cross_repo_sync::unsafe_sync_commit;
 use fbinit::FacebookInit;
 use fixtures::Linear;
 use fixtures::TestRepoFixture;
-use futures::future;
 use futures::FutureExt;
 use futures::TryFutureExt;
 use futures::TryStreamExt;
+use futures::future;
 use futures_ext::FbTryFutureExt;
-use justknobs::test_helpers::override_just_knobs;
-use justknobs::test_helpers::with_just_knobs_async;
 use justknobs::test_helpers::JustKnobsInMemory;
 use justknobs::test_helpers::KnobVal;
+use justknobs::test_helpers::override_just_knobs;
+use justknobs::test_helpers::with_just_knobs_async;
 use live_commit_sync_config::TestLiveCommitSyncConfig;
 use manifest::Entry;
 use manifest::ManifestOps;
@@ -87,20 +89,20 @@ use synced_commit_mapping::SyncedCommitMapping;
 use synced_commit_mapping::SyncedCommitMappingEntry;
 use synced_commit_mapping::SyncedCommitSourceRepo;
 use test_repo_factory::TestRepoFactory;
+use tests_utils::CreateCommitContext;
 use tests_utils::bookmark;
 use tests_utils::create_commit;
 use tests_utils::list_working_copy_utf8;
 use tests_utils::resolve_cs_id;
 use tests_utils::store_files;
 use tests_utils::store_rename;
-use tests_utils::CreateCommitContext;
 use tokio::runtime::Runtime;
 use wireproto_handler::TargetRepoDbs;
 
+use crate::BacksyncLimit;
 use crate::backsync_latest;
 use crate::format_counter;
 use crate::sync_entries;
-use crate::BacksyncLimit;
 
 const REPOMERGE_FOLDER: &str = "repomerge";
 const REPOMERGE_FILE: &str = "repomergefile";
@@ -778,15 +780,15 @@ async fn backsync_change_mapping(fb: FacebookInit) -> Result<(), Error> {
         .commit()
         .await?;
 
-    commit_syncer
-        .unsafe_always_rewrite_sync_commit(
-            &ctx,
-            root_cs_id,
-            None,
-            &current_version,
-            CommitSyncContext::Tests,
-        )
-        .await?;
+    unsafe_always_rewrite_sync_commit(
+        &ctx,
+        root_cs_id,
+        &commit_syncer,
+        None,
+        &current_version,
+        CommitSyncContext::Tests,
+    )
+    .await?;
 
     // Add one more empty commit with old mapping
     let before_mapping_change = CreateCommitContext::new(&ctx, &large_repo, vec![root_cs_id])
@@ -1989,16 +1991,16 @@ async fn preserve_premerge_commit(
         CommitSyncer::new(&ctx, repos, live_commit_sync_config)
     };
 
-    small_to_large_sync_config
-        .unsafe_sync_commit(
-            &ctx,
-            bcs_id,
-            CandidateSelectionHint::Only,
-            CommitSyncContext::Tests,
-            Some(CommitSyncConfigVersion("noop".to_string())),
-            false,
-        )
-        .await?;
+    unsafe_sync_commit(
+        &ctx,
+        bcs_id,
+        &small_to_large_sync_config,
+        CandidateSelectionHint::Only,
+        CommitSyncContext::Tests,
+        Some(CommitSyncConfigVersion("noop".to_string())),
+        false,
+    )
+    .await?;
 
     for another_repo_id in another_small_repo_ids {
         mapping

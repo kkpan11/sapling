@@ -10,10 +10,10 @@ use std::io;
 use std::io::Write;
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
-use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context;
@@ -56,10 +56,10 @@ use quiet_stream::QuietShutdownStream;
 use rate_limiting::RateLimitEnvironment;
 use scribe_ext::Scribe;
 use scuba_ext::MononokeScubaSampleBuilder;
+use slog::Logger;
 use slog::debug;
 use slog::error;
 use slog::warn;
-use slog::Logger;
 use sshrelay::IoStream;
 use sshrelay::SshDecoder;
 use sshrelay::SshEncoder;
@@ -239,6 +239,7 @@ pub struct AcceptedConnection {
     #[allow(dead_code)]
     pub mtls_disabled: bool,
     pub identities: Arc<MononokeIdentitySet>,
+    pub is_h2: bool,
 }
 
 impl PendingConnection {
@@ -281,12 +282,18 @@ async fn handle_connection(conn: PendingConnection, sock: TcpStream) -> Result<(
         .await
         .context("Failed to perform tls handshake")?;
 
+    let is_h2 = ssl_socket
+        .ssl()
+        .selected_alpn_protocol()
+        .is_some_and(|alpn| alpn == b"h2");
+
     let conn = match conn.acceptor.mtls_disabled {
         true => AcceptedConnection {
             pending: conn,
             is_trusted: false,
             mtls_disabled: true,
             identities: Arc::new(MononokeIdentitySet::new()),
+            is_h2,
         },
         false => {
             let identities = match ssl_socket.ssl().peer_certificate() {
@@ -304,6 +311,7 @@ async fn handle_connection(conn: PendingConnection, sock: TcpStream) -> Result<(
                 is_trusted,
                 mtls_disabled: false,
                 identities: Arc::new(identities),
+                is_h2,
             }
         }
     };
@@ -321,6 +329,7 @@ async fn handle_http<S: MononokeStream>(conn: AcceptedConnection, stream: S) -> 
     STATS::http_accepted.add_value(1);
     let svc = MononokeHttpService::<S>::new(conn);
     Http::new()
+        .http2_enable_connect_protocol()
         .serve_connection(stream, svc)
         .with_upgrades()
         .await

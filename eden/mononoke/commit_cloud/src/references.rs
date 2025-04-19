@@ -12,24 +12,26 @@ use bonsai_hg_mapping::BonsaiHgMapping;
 use bonsai_hg_mapping::BonsaiHgMappingEntry;
 use changeset_info::ChangesetInfo;
 use clientinfo::ClientRequestInfo;
-use commit_cloud_types::references::WorkspaceRemoteBookmark;
 use commit_cloud_types::ReferencesData;
 use commit_cloud_types::UpdateReferencesParams;
 use commit_cloud_types::WorkspaceCheckoutLocation;
 use commit_cloud_types::WorkspaceHead;
 use commit_cloud_types::WorkspaceLocalBookmark;
 use commit_cloud_types::WorkspaceSnapshot;
+use commit_cloud_types::changeset::CloudChangesetId;
+use commit_cloud_types::references::WorkspaceRemoteBookmark;
 use context::CoreContext;
+use futures::FutureExt;
 use futures::future;
 use futures::stream;
 use futures::stream::TryStreamExt;
-use futures::FutureExt;
 use history::WorkspaceHistory;
 use mercurial_types::HgChangesetId;
 use repo_derived_data::ArcRepoDerivedData;
 use sql::Transaction;
 use versions::WorkspaceVersion;
 
+use crate::CommitCloudContext;
 use crate::references::heads::update_heads;
 use crate::references::local_bookmarks::update_bookmarks;
 use crate::references::remote_bookmarks::update_remote_bookmarks;
@@ -39,7 +41,6 @@ use crate::sql::ops::Get;
 use crate::sql::ops::SqlCommitCloud;
 use crate::sql::ops::Update;
 use crate::sql::versions_ops::UpdateVersionArgs;
-use crate::CommitCloudContext;
 
 pub mod heads;
 pub mod history;
@@ -92,7 +93,7 @@ pub(crate) async fn cast_references_data(
 ) -> Result<ReferencesData, anyhow::Error> {
     let mut bookmarks: HashMap<String, HgChangesetId> = HashMap::new();
     let remote_bookmarks: Vec<WorkspaceRemoteBookmark> = raw_references_data.remote_bookmarks;
-    let mut snapshots: Vec<HgChangesetId> = Vec::new();
+    let mut snapshots: Vec<CloudChangesetId> = Vec::new();
 
     // Start the pipeline with batches of 1000 heads.
     let chunks_iter = raw_references_data.heads.chunks(1000).map(|chunk| {

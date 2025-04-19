@@ -784,6 +784,7 @@ export type LocalStorageName =
   | 'isl.debug-redux-tools'
   | 'isl.condense-obsolete-stacks'
   | 'isl.deemphasize-cwd-irrelevant-commits'
+  | 'isl.hide-cwd-irrelevant-stacks'
   | 'isl.split-suggestion-enabled'
   | 'isl.comparison-display-mode'
   | 'isl.expand-generated-files'
@@ -1022,7 +1023,7 @@ export type ServerToClientMessage =
   | {
       type: 'fetchedQeDetails';
       id: string;
-      result: Result<InternalTypes['InternalQuickExperment']>;
+      result: Result<InternalTypes['InternalQuickExperiment']>;
     };
 
 export type Disposable = {

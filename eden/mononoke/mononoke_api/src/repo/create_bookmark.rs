@@ -17,13 +17,14 @@ use bookmarks_movement::CreateBookmarkOp;
 use bytes::Bytes;
 use cross_repo_sync::CandidateSelectionHint;
 use cross_repo_sync::CommitSyncContext;
+use cross_repo_sync::sync_commit;
 use hook_manager::manager::HookManagerRef;
 use mononoke_types::ChangesetId;
 
+use crate::MononokeRepo;
 use crate::errors::MononokeError;
 use crate::invalid_push_redirected_request;
 use crate::repo::RepoContext;
-use crate::MononokeRepo;
 
 impl<R: MononokeRepo> RepoContext<R> {
     async fn create_bookmark_op<'a>(
@@ -53,11 +54,10 @@ impl<R: MononokeRepo> RepoContext<R> {
                 )));
             }
             let ctx = self.ctx();
-            let target = redirector
-                .small_to_large_commit_syncer
-                .sync_commit(
+            let target = sync_commit(
                     ctx,
                     target,
+                    &redirector.small_to_large_commit_syncer,
                     CandidateSelectionHint::Only,
                     CommitSyncContext::PushRedirector,
                     false,
